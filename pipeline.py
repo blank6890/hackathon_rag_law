@@ -3,6 +3,21 @@ ComplianceMind — LLM reasoning pipeline.
 
 Orchestrates: fact extraction → retrieval → compliance scoring → recommendations.
 All LLM calls go through the Groq SDK (reads GROQ_API_KEY from env).
+
+BUGFIXES vs original:
+  1. Lazy Groq client init — original did `_client = Groq()` at module
+     import time, which crashes the whole app if GROQ_API_KEY is unset,
+     even before the user clicks anything. Now the client is created
+     on first use inside _call_llm().
+  2. Empty retrieval guard — if retrieve_sections() returns [], the
+     scoring LLM gets nothing useful and may hallucinate. Now we short-
+     circuit with a friendly "no applicable statutes" message.
+  3. Clarification logic — original checked
+     `facts.get("collects_personal_data") is None` but the LLM is asked
+     to return a bool, so the check never triggered. We now rely
+     solely on the `is_vague` flag (which is what the prompt actually
+     controls), and generate a more useful clarifying question by
+     inspecting which fields the LLM left blank/empty-string.
 """
 
 import json
@@ -22,17 +37,32 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 from retrieval_stub import retrieve_sections  # TODO: swap for teammate's real retrieval.py
 
+
 # ---------------------------------------------------------------------------
-# Groq client (singleton — reuses connection across calls)
+# Groq client (lazy singleton — created on first use, not at import time)
 # ---------------------------------------------------------------------------
-_client = Groq()  # reads GROQ_API_KEY from environment
+_client: Groq | None = None
+
+
+def _get_client() -> Groq:
+    """Return a singleton Groq client, instantiating it on first use.
+
+    Reading GROQ_API_KEY happens here, not at module load — so importing
+    pipeline.py (e.g. for unit tests, or just to render the UI shell)
+    never crashes the app for missing credentials. The error surfaces
+    only when the user actually triggers an LLM call.
+    """
+    global _client
+    if _client is None:
+        _client = Groq()  # reads GROQ_API_KEY from environment
+    return _client
 
 
 # ========================== HELPER ========================================
 def _call_llm(model: str, system_prompt: str, user_prompt: str,
               temperature: float = 0) -> str:
     """Send a chat-completion request and return the assistant's text."""
-    response = _client.chat.completions.create(
+    response = _get_client().chat.completions.create(
         model=model,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -43,20 +73,24 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str,
     return response.choices[0].message.content.strip()
 
 
+def _strip_code_fence(raw: str) -> str:
+    """Strip ```...``` markdown fences if the model wrapped its output."""
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1]  # remove opening fence line
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+    return cleaned
+
+
 def _parse_json_with_retry(raw: str, model: str, system_prompt: str,
                            user_prompt: str, temperature: float = 0) -> Any:
     """Try to parse *raw* as JSON; on failure retry the LLM once with a
     stricter prompt, then raise a clear error."""
     # First attempt — try parsing what we got
     try:
-        # Strip markdown fences if the model wrapped its output
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1]  # remove opening fence
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-            cleaned = cleaned.strip()
-        return json.loads(cleaned)
+        return json.loads(_strip_code_fence(raw))
     except json.JSONDecodeError:
         pass
 
@@ -69,13 +103,7 @@ def _parse_json_with_retry(raw: str, model: str, system_prompt: str,
     )
     raw2 = _call_llm(model, strict_system, user_prompt, temperature)
     try:
-        cleaned2 = raw2.strip()
-        if cleaned2.startswith("```"):
-            cleaned2 = cleaned2.split("\n", 1)[1]
-            if cleaned2.endswith("```"):
-                cleaned2 = cleaned2[:-3]
-            cleaned2 = cleaned2.strip()
-        return json.loads(cleaned2)
+        return json.loads(_strip_code_fence(raw2))
     except json.JSONDecodeError as exc:
         raise ValueError(
             f"LLM returned invalid JSON even after retry.\n"
@@ -206,6 +234,8 @@ def run_pipeline(user_input: str) -> dict:
     Returns:
         If input is too vague:
             {"needs_clarification": True, "message": "<clarifying question>"}
+        If no relevant statutes were retrieved:
+            {"needs_clarification": True, "message": "<no-applicable-statutes msg>"}
         Otherwise:
             {"needs_clarification": False, "report": "<markdown>",
              "findings": [<list>], "sources": [<list>]}
@@ -215,22 +245,24 @@ def run_pipeline(user_input: str) -> dict:
 
     # Step 2: Check if input is too vague
     if facts.get("is_vague", False):
-        # Generate a relevant clarifying question
+        # Build a clarifying question based on which fields are empty or
+        # clearly defaulted. NOTE: the LLM returns booleans for the
+        # yes/no fields, so we can't use `is None` — we look at the
+        # string fields and data_types list instead, which is where
+        # vagueness actually shows up.
         missing_parts = []
         if not facts.get("industry"):
             missing_parts.append("what industry you're in")
-        if facts.get("collects_personal_data") is None:
-            missing_parts.append("whether you collect personal data")
-        if facts.get("is_online") is None:
-            missing_parts.append("whether your business operates online")
-        if facts.get("processes_payments") is None:
-            missing_parts.append("whether you process payments")
+        if not facts.get("data_types"):
+            missing_parts.append("what kind of data you collect from users")
+        if not facts.get("is_online") and not facts.get("processes_payments"):
+            missing_parts.append("whether you operate online or process payments")
 
         if missing_parts:
             message = (
                 "Your description is a bit too brief for a thorough analysis. "
                 f"Could you clarify: {', '.join(missing_parts)}? "
-                "Also, what kind of data do you collect from users, if any?"
+                "The more specific you are, the more accurate the citations will be."
             )
         else:
             message = (
@@ -242,6 +274,19 @@ def run_pipeline(user_input: str) -> dict:
 
     # Step 3: Retrieve relevant statute sections
     sections = retrieve_sections(user_input)
+
+    # BUGFIX: guard against empty retrieval — scoring an empty section list
+    # would push the LLM to hallucinate. Better to surface a clear message.
+    if not sections:
+        return {
+            "needs_clarification": True,
+            "message": (
+                "I couldn't find any Indian statute sections directly relevant "
+                "to your description. Could you add a bit more detail about your "
+                "business model — for example, whether you collect personal data, "
+                "process payments, sell to consumers, or operate online?"
+            ),
+        }
 
     # Step 4: Score compliance
     findings = score_compliance(facts, sections)

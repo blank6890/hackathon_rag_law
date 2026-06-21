@@ -1,45 +1,59 @@
 """
 ComplianceMind — "Government Gazette" design system.
 
-Two delivery mechanisms, per the design brief:
-  1. GLOBAL_CSS — injected once via st.markdown(unsafe_allow_html=True) to
+A real-world government legal notice is the closest artifact to what this
+tool produces, so the entire visual language is built around that metaphor:
+
+  • ivory paper background, ink-black body, navy headings
+  • a letterhead strip with file-reference number in mono
+  • an official seal / emblem drawn purely in CSS (no image asset)
+  • a "NOTICE OF FINDINGS" masthead framing the results
+  • per-finding circular seal stamps that bear the act abbreviation
+    (DPDP, ITA, CPA, GST, ECOM) — visually saying "this claim has been
+    officially verified", which is the product pitch in one element
+
+Two delivery mechanisms:
+  1. get_global_css() — injected via st.markdown(unsafe_allow_html=True) to
      restyle Streamlit's native widgets (text area, button, expander, alerts)
      so they match the token system below.
-  2. render_hero() / render_finding_cards() — self-contained HTML/CSS/JS
-     strings rendered via streamlit.components.v1.html() for the decorative,
-     scroll-animated elements that native CSS injection can't drive.
+  2. render_hero() / render_notice_header() / render_finding_cards() —
+     self-contained HTML/CSS/JS strings rendered via
+     streamlit.components.v1.html() for the decorative, scroll-animated
+     elements that native CSS injection can't drive.
 
 Design tokens are LOCKED per the brief — do not introduce new hex values.
 """
 
 import html
+import re
 
-# ── Phase 3: locked color tokens ────────────────────────────────────────────
-PAPER = "#F7F5F0"        # background
-INK = "#1A1A1A"           # primary text
-NAVY = "#1B2A4A"          # primary accent (official navy)
-SEAL_RED = "#8C1D1D"      # status/alert accent
-GOLD = "#B08D57"          # secondary accent (emblem gold)
-COMPLIANT_GREEN = "#4C6B3F"  # muted olive-green, chosen to harmonize with
-                              # the navy/red/gold "ink on aged paper" palette
-                              # rather than a generic bright green
+# ── Locked color tokens (per design brief) ─────────────────────────────────
+PAPER = "#F7F5F0"            # ivory paper background
+INK = "#1A1A1A"              # primary text
+NAVY = "#1B2A4A"             # official navy (primary accent)
+SEAL_RED = "#8C1D1D"         # seal red (status / alert accent)
+GOLD = "#B08D57"             # emblem gold (secondary accent)
+COMPLIANT_GREEN = "#4C6B3F"  # muted olive-green for "compliant" status
+RULE_GREY = "rgba(26,26,26,0.10)"  # hairline rules between sections
 
-# ── Phase 1 (fallback) motion + card tokens — see chat for rationale ───────
-CARD_RADIUS = "16px"
-CARD_SHADOW = "0 4px 20px rgba(26,26,26,0.08), 0 1px 3px rgba(26,26,26,0.04)"
-CARD_BORDER = "1px solid rgba(26,26,26,0.07)"
+# ── Motion + card tokens ────────────────────────────────────────────────────
+CARD_RADIUS = "14px"
+CARD_SHADOW = "0 1px 3px rgba(26,26,26,0.06), 0 4px 14px rgba(26,26,26,0.05)"
+CARD_SHADOW_LIFT = "0 2px 6px rgba(26,26,26,0.08), 0 10px 28px rgba(26,26,26,0.10)"
+CARD_BORDER = "1px solid rgba(27,42,74,0.10)"
 MOTION_DURATION = "420ms"
 MOTION_EASE = "cubic-bezier(0.16, 1, 0.3, 1)"  # soft "ease-out-expo" landing
 
-FONT_DISPLAY = "'Source Serif 4', Georgia, serif"
-FONT_BODY = "'IBM Plex Sans', -apple-system, sans-serif"
-FONT_MONO = "'IBM Plex Mono', 'SFMono-Regular', monospace"
+# ── Typography ─────────────────────────────────────────────────────────────
+FONT_DISPLAY = "'Source Serif 4', 'Lora', Georgia, serif"
+FONT_BODY = "'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+FONT_MONO = "'IBM Plex Mono', 'SFMono-Regular', Menlo, monospace"
 
 GOOGLE_FONTS_IMPORT = (
     "@import url('https://fonts.googleapis.com/css2?"
-    "family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&"
-    "family=IBM+Plex+Sans:wght@400;500;600&"
-    "family=IBM+Plex+Mono:wght@400;500&display=swap');"
+    "family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&"
+    "family=IBM+Plex+Sans:wght@400;500;600;700&"
+    "family=IBM+Plex+Mono:wght@400;500;600&display=swap');"
 )
 
 _STATUS_COLORS = {
@@ -47,6 +61,38 @@ _STATUS_COLORS = {
     "gap": SEAL_RED,
     "unclear": GOLD,
 }
+
+_STATUS_LABELS = {
+    "compliant": "COMPLIANT",
+    "gap": "GAP FOUND",
+    "unclear": "UNCLEAR",
+}
+
+# ── Act abbreviation lookup for seal stamps ────────────────────────────────
+# Each finding's seal bears the abbreviation of the act it cites — visually
+# echoing how a real government stamp bears the issuing department's seal.
+_ACT_ABBREVIATIONS = [
+    # (regex pattern, abbreviation shown on the seal)
+    (r"digital personal data protection|dpdp", "DPDP"),
+    (r"information technology|it act|itact", "ITA"),
+    (r"consumer protection.*e-commerce|e-commerce rule", "ECOM"),
+    (r"consumer protection|cpa", "CPA"),
+    (r"goods and services tax|gst", "GST"),
+]
+
+
+def _act_abbreviation(act_name: str) -> str:
+    """Return a 2-5 letter abbreviation for the act, used on the seal stamp."""
+    if not act_name:
+        return "§"
+    low = act_name.lower()
+    for pattern, abbr in _ACT_ABBREVIATIONS:
+        if re.search(pattern, low):
+            return abbr
+    # Fallback: first letters of significant words
+    words = [w for w in re.findall(r"[A-Za-z]+", act_name)
+             if w.lower() not in {"act", "the", "of", "and", "for"}]
+    return "".join(w[0] for w in words[:4]).upper() or "§"
 
 
 # ============================================================================
@@ -59,11 +105,10 @@ def get_global_css() -> str:
 
 /* ── Top header / toolbar (the "Deploy" bar) ─────────────────────────────
    Unstyled, this defaults to Streamlit's own theme (often a stark black
-   bar) regardless of our .stApp overrides below, since it's themed
-   independently. Retint it to read as a quiet letterhead strip. */
+   bar). Retint it to read as a quiet letterhead strip. */
 header[data-testid="stHeader"] {{
     background: {PAPER} !important;
-    border-bottom: 1px solid rgba(27,42,74,0.10);
+    border-bottom: 1px solid {RULE_GREY};
 }}
 [data-testid="stToolbar"],
 [data-testid="stToolbarActions"],
@@ -86,12 +131,19 @@ header[data-testid="stHeader"] {{
     color: {NAVY} !important;
 }}
 
+/* ── App background & layout width ─────────────────────────────────────── */
 .stApp {{
     background: {PAPER};
+    /* Subtle paper-grain via layered radial gradients — barely visible,
+       but breaks up the flat ivory and reads as "official document". */
+    background-image:
+        radial-gradient(circle at 20% 30%, rgba(176,141,87,0.025) 0%, transparent 50%),
+        radial-gradient(circle at 80% 70%, rgba(27,42,74,0.018) 0%, transparent 50%);
 }}
 .block-container {{
-    max-width: 760px;
+    max-width: 780px;
     padding-top: 1.5rem;
+    padding-bottom: 4rem;
 }}
 
 /* ── Typography ───────────────────────────────────────────────────────── */
@@ -100,7 +152,7 @@ header[data-testid="stHeader"] {{
     color: {INK};
     line-height: 1.65;
 }}
-.stApp h1, .stApp h2, .stApp h3 {{
+.stApp h1, .stApp h2, .stApp h3, .stApp h4 {{
     font-family: {FONT_DISPLAY};
     color: {NAVY};
     font-weight: 600;
@@ -117,10 +169,21 @@ code, .stMarkdown code {{
     border-radius: 4px;
     font-size: 0.85em;
 }}
+/* Body markdown rendered from the LLM report — keep readable line length
+   and ensure bullet lists don't get justify-stretched (per project rule). */
+.stMarkdown ul, .stMarkdown ol {{
+    padding-left: 1.4em;
+}}
+.stMarkdown li {{
+    margin-bottom: 0.4em;
+    text-align: left;
+}}
+.stMarkdown strong {{
+    color: {NAVY};
+    font-weight: 600;
+}}
 
-/* Native st.title()/st.caption() — kept as a quiet fallback; the visible
-   header is the custom hero component below, so hide the default title to
-   avoid a duplicate heading. */
+/* Native st.caption() — quiet fallback */
 [data-testid="stCaptionContainer"] {{
     font-family: {FONT_BODY};
     color: {INK};
@@ -172,7 +235,8 @@ code, .stMarkdown code {{
     color: {PAPER};
     border: none;
     border-radius: 10px;
-    padding: 0.6rem 1.2rem;
+    padding: 0.7rem 1.2rem;
+    letter-spacing: 0.01em;
     box-shadow: 0 2px 8px rgba(27,42,74,0.25);
     transition: transform {MOTION_DURATION} {MOTION_EASE},
                 box-shadow {MOTION_DURATION} {MOTION_EASE},
@@ -187,7 +251,7 @@ code, .stMarkdown code {{
     transform: translateY(0px);
 }}
 
-/* ── Expander ─────────────────────────────────────────────────────────── */
+/* ── Expander (Sources panel) ─────────────────────────────────────────── */
 [data-testid="stExpander"] {{
     border: 1px solid rgba(27,42,74,0.12);
     border-radius: {CARD_RADIUS};
@@ -209,7 +273,7 @@ code, .stMarkdown code {{
 
 /* ── Divider ──────────────────────────────────────────────────────────── */
 hr {{
-    border-color: rgba(27,42,74,0.15) !important;
+    border-color: {RULE_GREY} !important;
     margin: 2rem 0 !important;
 }}
 
@@ -223,37 +287,73 @@ hr {{
 
 
 # ============================================================================
-# 2. Hero banner — components.v1.html()
+# 2. Hero banner — letterhead-style masthead
 # ============================================================================
 def render_hero() -> str:
-    """Oversized display-serif hero with a CSS-drawn official emblem.
-    No image asset — the seal is pure radial-gradient + border."""
+    """Official letterhead hero: emblem + masthead + tagline + ref number.
+
+    Pure CSS — no image asset. The emblem is a layered radial-gradient disc
+    with a gold rim and a dashed inner ring, reading as a stamped wax seal.
+    A mono "Ref. No." in the corner completes the official-document feel.
+    """
     return f"""
 <style>
 {GOOGLE_FONTS_IMPORT}
 * {{ box-sizing: border-box; }}
+body {{ margin: 0; }}
 .cm-hero {{
     font-family: {FONT_BODY};
     background: {PAPER};
-    padding: 8px 4px 28px 4px;
-    display: flex;
-    align-items: center;
-    gap: 24px;
+    padding: 4px 4px 18px 4px;
     opacity: 0;
-    transform: translateY(18px);
+    transform: translateY(14px);
     animation: cmHeroIn {MOTION_DURATION} {MOTION_EASE} forwards;
 }}
 @keyframes cmHeroIn {{
     to {{ opacity: 1; transform: translateY(0); }}
 }}
+
+/* Top hairline strip + file reference number — like a real letterhead */
+.cm-letterhead-strip {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 12px;
+    margin-bottom: 18px;
+    border-bottom: 1px solid {RULE_GREY};
+}}
+.cm-letterhead-strip .cm-rule {{
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, {RULE_GREY}, transparent);
+}}
+.cm-ref {{
+    font-family: {FONT_MONO};
+    font-size: 0.62rem;
+    letter-spacing: 0.10em;
+    color: {NAVY};
+    opacity: 0.55;
+    text-transform: uppercase;
+    white-space: nowrap;
+}}
+
+.cm-hero-row {{
+    display: flex;
+    align-items: center;
+    gap: 22px;
+}}
+
+/* Emblem — pure CSS, layered like a wax seal */
 .cm-emblem {{
     flex: 0 0 auto;
-    width: 76px;
-    height: 76px;
+    width: 72px;
+    height: 72px;
     border-radius: 50%;
     background: radial-gradient(circle at 35% 30%, #2a4068 0%, {NAVY} 55%, #142036 100%);
     border: 3px solid {GOLD};
-    box-shadow: 0 4px 14px rgba(27,42,74,0.35), inset 0 0 0 3px rgba(247,245,240,0.15);
+    box-shadow: 0 4px 14px rgba(27,42,74,0.35),
+                inset 0 0 0 3px rgba(247,245,240,0.15);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -262,65 +362,251 @@ def render_hero() -> str:
 .cm-emblem::before {{
     content: "";
     position: absolute;
-    inset: 8px;
+    inset: 7px;
     border-radius: 50%;
     border: 1px dashed rgba(247,245,240,0.4);
 }}
 .cm-emblem-glyph {{
     font-family: {FONT_DISPLAY};
-    color: {PAPER};
-    font-size: 28px;
+    color: {GOLD};
+    font-size: 30px;
     font-weight: 600;
     line-height: 1;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
 }}
+
 .cm-hero-text h1 {{
     font-family: {FONT_DISPLAY};
     font-weight: 700;
-    font-size: clamp(2.1rem, 5vw, 3rem);
+    font-size: clamp(2.0rem, 4.5vw, 2.8rem);
     line-height: 1.05;
     letter-spacing: -0.015em;
     color: {NAVY};
-    margin: 0 0 6px 0;
+    margin: 0 0 4px 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}}
+.cm-hero-text h1 .cm-scales {{
+    color: {GOLD};
+    font-size: 0.85em;
 }}
 .cm-hero-text p {{
     font-family: {FONT_BODY};
-    font-size: 0.98rem;
+    font-size: 0.95rem;
     color: {INK};
     opacity: 0.72;
     margin: 0;
-    max-width: 46ch;
+    max-width: 48ch;
+    line-height: 1.5;
 }}
+.cm-tagline {{
+    font-family: {FONT_MONO};
+    font-size: 0.66rem;
+    letter-spacing: 0.16em;
+    color: {SEAL_RED};
+    text-transform: uppercase;
+    margin-top: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}}
+.cm-tagline::before {{
+    content: "";
+    display: inline-block;
+    width: 18px;
+    height: 1px;
+    background: {SEAL_RED};
+}}
+
 @media (prefers-reduced-motion: reduce) {{
     .cm-hero {{ animation: none; opacity: 1; transform: none; }}
+}}
+@media (max-width: 520px) {{
+    .cm-emblem {{ width: 56px; height: 56px; }}
+    .cm-emblem-glyph {{ font-size: 22px; }}
+    .cm-hero-row {{ gap: 14px; }}
 }}
 </style>
 
 <div class="cm-hero">
-    <div class="cm-emblem"><span class="cm-emblem-glyph">&#9878;</span></div>
-    <div class="cm-hero-text">
-        <h1>ComplianceMind</h1>
-        <p>Describe your business in plain English and find out which Indian
-           laws apply &mdash; with every claim cited to a real statute section.</p>
+    <div class="cm-letterhead-strip">
+        <span class="cm-ref">Ref. No. CM/2026/XXXX</span>
+        <span class="cm-rule"></span>
+        <span class="cm-ref">Issued electronically</span>
+    </div>
+    <div class="cm-hero-row">
+        <div class="cm-emblem"><span class="cm-emblem-glyph">&#9878;</span></div>
+        <div class="cm-hero-text">
+            <h1><span class="cm-scales">&#9878;</span>ComplianceMind</h1>
+            <p>Describe your business in plain English and find out which
+               Indian laws apply &mdash; with every claim cited to a real
+               statute section.</p>
+            <span class="cm-tagline">A cited compliance check, not a guess</span>
+        </div>
     </div>
 </div>
 """
 
 
 # ============================================================================
-# 3. Finding / source cards — components.v1.html()
+# 3. NOTICE OF FINDINGS masthead — frames the results section
+# ============================================================================
+def render_notice_header(findings: list[dict] | None = None) -> str:
+    """A formal 'NOTICE OF FINDINGS' masthead that sits above the report.
+
+    Doubles as a summary stat block: counts of compliant / gap / unclear
+    items are shown as small mono-set tallies on the right, like a docket.
+    """
+    findings = findings or []
+    counts = {"compliant": 0, "gap": 0, "unclear": 0}
+    for f in findings:
+        s = (f.get("status") or "").lower()
+        if s in counts:
+            counts[s] += 1
+    total = sum(counts.values())
+
+    return f"""
+<style>
+{GOOGLE_FONTS_IMPORT}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; }}
+.cm-notice {{
+    font-family: {FONT_BODY};
+    background: #FFFFFF;
+    border: 1px solid rgba(27,42,74,0.14);
+    border-top: 4px solid {NAVY};
+    border-radius: {CARD_RADIUS};
+    padding: 22px 26px 18px 26px;
+    box-shadow: {CARD_SHADOW};
+    margin: 6px 0 18px 0;
+    opacity: 0;
+    transform: translateY(12px);
+    animation: cmNoticeIn {MOTION_DURATION} {MOTION_EASE} forwards;
+    position: relative;
+    overflow: hidden;
+}}
+@keyframes cmNoticeIn {{
+    to {{ opacity: 1; transform: translateY(0); }}
+}}
+/* faint corner watermark */
+.cm-notice::after {{
+    content: "";
+    position: absolute;
+    top: -28px;
+    right: -28px;
+    width: 110px;
+    height: 110px;
+    border: 1px solid rgba(176,141,87,0.18);
+    border-radius: 50%;
+    pointer-events: none;
+}}
+.cm-notice-eyebrow {{
+    font-family: {FONT_MONO};
+    font-size: 0.62rem;
+    letter-spacing: 0.18em;
+    color: {SEAL_RED};
+    text-transform: uppercase;
+    margin-bottom: 6px;
+}}
+.cm-notice-title {{
+    font-family: {FONT_DISPLAY};
+    font-weight: 700;
+    font-size: 1.6rem;
+    color: {NAVY};
+    margin: 0 0 6px 0;
+    letter-spacing: -0.01em;
+}}
+.cm-notice-sub {{
+    font-size: 0.88rem;
+    color: {INK};
+    opacity: 0.7;
+    margin: 0 0 14px 0;
+    max-width: 52ch;
+}}
+.cm-notice-tally {{
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    padding-top: 12px;
+    border-top: 1px dashed {RULE_GREY};
+}}
+.cm-tally-item {{
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}}
+.cm-tally-num {{
+    font-family: {FONT_DISPLAY};
+    font-size: 1.4rem;
+    font-weight: 700;
+    line-height: 1;
+    color: {NAVY};
+}}
+.cm-tally-num.is-gap {{ color: {SEAL_RED}; }}
+.cm-tally-num.is-compliant {{ color: {COMPLIANT_GREEN}; }}
+.cm-tally-num.is-unclear {{ color: {GOLD}; }}
+.cm-tally-label {{
+    font-family: {FONT_MONO};
+    font-size: 0.6rem;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: {INK};
+    opacity: 0.6;
+}}
+@media (prefers-reduced-motion: reduce) {{
+    .cm-notice {{ animation: none; opacity: 1; transform: none; }}
+}}
+</style>
+
+<div class="cm-notice">
+    <div class="cm-notice-eyebrow">Official Communication</div>
+    <h2 class="cm-notice-title">Notice of Findings</h2>
+    <p class="cm-notice-sub">The following compliance assessment has been
+       prepared from the business description you submitted. Each finding
+       is grounded in a specific provision of Indian statute law.</p>
+    <div class="cm-notice-tally">
+        <div class="cm-tally-item">
+            <span class="cm-tally-num">{total}</span>
+            <span class="cm-tally-label">Total Reviewed</span>
+        </div>
+        <div class="cm-tally-item">
+            <span class="cm-tally-num is-gap">{counts['gap']}</span>
+            <span class="cm-tally-label">Gaps Found</span>
+        </div>
+        <div class="cm-tally-item">
+            <span class="cm-tally-num is-unclear">{counts['unclear']}</span>
+            <span class="cm-tally-label">Unclear</span>
+        </div>
+        <div class="cm-tally-item">
+            <span class="cm-tally-num is-compliant">{counts['compliant']}</span>
+            <span class="cm-tally-label">Compliant</span>
+        </div>
+    </div>
+</div>
+"""
+
+
+# ============================================================================
+# 4. Finding / source cards — with per-act circular seal stamps
 # ============================================================================
 def _status_label(status: str) -> str:
-    return {"compliant": "Compliant", "gap": "Gap found", "unclear": "Unclear"}.get(
-        status, status.title() if status else ""
-    )
+    return _STATUS_LABELS.get((status or "").lower(), "")
 
 
 def render_finding_cards(sources: list[dict], findings: list[dict] | None = None) -> str:
     """Render all source/finding cards as one animated HTML block.
 
-    Each card fades + slides up as it scrolls into view, and carries a small
-    CSS-drawn seal-red 'verified' stamp next to its citation that lands with
-    the same entrance motion (slightly bouncier, to feel like a stamp).
+    Each card carries a small CSS-drawn circular seal stamp bearing the act
+    abbreviation (DPDP / ITA / CPA / GST / ECOM) — visually saying "this
+    claim has been officially verified", which is the entire pitch in one
+    visual element. The stamp lands with a slightly bouncier motion to
+    feel like a rubber stamp being pressed onto paper.
+
+    Includes a JS auto-resize script that streams the iframe's measured
+    height up to the parent Streamlit page via postMessage, so the
+    components.html() container always fits the cards exactly — no
+    scrollbar, no clipped content.
     """
     findings = findings or []
     status_by_section = {
@@ -334,8 +620,9 @@ def render_finding_cards(sources: list[dict], findings: list[dict] | None = None
         title = html.escape(src.get("title", ""))
         text = html.escape(src.get("text", ""))
         status = status_by_section.get((src.get("act"), src.get("section")))
-        status_color = _STATUS_COLORS.get(status, GOLD)
+        status_color = _STATUS_COLORS.get(status, GOLD) if status else GOLD
         status_label = html.escape(_status_label(status)) if status else ""
+        act_abbr = html.escape(_act_abbreviation(src.get("act", "")))
 
         delay_ms = i * 90  # staggered reveal across cards
 
@@ -348,9 +635,9 @@ def render_finding_cards(sources: list[dict], findings: list[dict] | None = None
             <h4>{act}</h4>
             <p class="cm-card-subtitle"><strong>{title}</strong></p>
             <p class="cm-card-body">{text}</p>
-            <div class="cm-stamp" aria-hidden="true">
+            <div class="cm-stamp" aria-hidden="true" title="Verified: {act_abbr}">
                 <div class="cm-stamp-ring">
-                    <span class="cm-stamp-text">VERIFIED</span>
+                    <span class="cm-stamp-text">{act_abbr}</span>
                 </div>
             </div>
         </article>
@@ -367,8 +654,8 @@ body {{ margin: 0; }}
     font-family: {FONT_BODY};
     display: flex;
     flex-direction: column;
-    gap: 20px;
-    padding: 4px 2px 24px 2px;
+    gap: 18px;
+    padding: 4px 2px 20px 2px;
 }}
 .cm-card {{
     position: relative;
@@ -376,15 +663,16 @@ body {{ margin: 0; }}
     border-radius: {CARD_RADIUS};
     box-shadow: {CARD_SHADOW};
     border: {CARD_BORDER};
-    padding: 22px 26px 22px 22px;
+    padding: 22px 84px 22px 22px;  /* right padding reserves room for the stamp */
     opacity: 0;
-    transform: translateY(24px);
+    transform: translateY(22px);
     transition: opacity {MOTION_DURATION} {MOTION_EASE},
                 transform {MOTION_DURATION} {MOTION_EASE},
-                box-shadow 200ms ease;
+                box-shadow 220ms ease;
 }}
 .cm-card:hover {{
-    box-shadow: 0 8px 28px rgba(26,26,26,0.12), 0 2px 6px rgba(26,26,26,0.06);
+    box-shadow: {CARD_SHADOW_LIFT};
+    transform: translateY(-2px);
 }}
 .cm-card.cm-visible {{
     opacity: 1;
@@ -393,88 +681,124 @@ body {{ margin: 0; }}
 .cm-card-top {{
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 10px;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
 }}
 .cm-tag {{
     font-family: {FONT_MONO};
-    font-size: 0.74rem;
+    font-size: 0.72rem;
+    font-weight: 500;
     letter-spacing: 0.02em;
     background: rgba(27,42,74,0.08);
     color: {NAVY};
     padding: 3px 9px;
-    border-radius: 5px;
+    border-radius: 4px;
 }}
 .cm-status {{
-    font-family: {FONT_BODY};
-    font-size: 0.72rem;
+    font-family: {FONT_MONO};
+    font-size: 0.62rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.08em;
     color: var(--status-color);
+    padding: 3px 9px;
+    border: 1px solid var(--status-color);
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
 }}
 .cm-status::before {{
-    content: "\\25CF";
-    margin-right: 5px;
-    font-size: 0.6rem;
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--status-color);
 }}
 .cm-card h4 {{
     font-family: {FONT_DISPLAY};
     color: {NAVY};
     font-weight: 600;
-    font-size: 1.08rem;
+    font-size: 1.06rem;
     margin: 0 0 4px 0;
+    line-height: 1.3;
+    padding-right: 4px;
 }}
 .cm-card-subtitle {{
-    margin: 0 0 8px 0;
-    font-size: 0.9rem;
+    margin: 0 0 10px 0;
+    font-size: 0.88rem;
     color: {INK};
     opacity: 0.85;
 }}
 .cm-card-body {{
     margin: 0;
-    font-size: 0.88rem;
-    line-height: 1.6;
+    font-size: 0.85rem;
+    line-height: 1.62;
     color: {INK};
     opacity: 0.78;
+    /* Cited statute text reads like a quoted legal passage */
+    border-left: 2px solid rgba(176,141,87,0.45);
+    padding-left: 12px;
 }}
 
-/* Seal stamp — pure CSS, no image asset */
+/* ── Seal stamp — pure CSS, no image asset ──────────────────────────────
+   Bears the act abbreviation (DPDP / ITA / CPA / GST / ECOM).
+   Bouncy cubic-bezier on reveal reads like a rubber stamp being pressed. */
 .cm-stamp {{
     position: absolute;
-    top: 16px;
+    top: 18px;
     right: 18px;
     opacity: 0;
     transform: scale(0.4) rotate(-30deg);
     transition: opacity {MOTION_DURATION} cubic-bezier(0.34, 1.56, 0.64, 1),
                 transform {MOTION_DURATION} cubic-bezier(0.34, 1.56, 0.64, 1);
+    pointer-events: none;
 }}
 .cm-card.cm-visible .cm-stamp {{
-    opacity: 0.9;
-    transform: scale(1) rotate(-8deg);
+    opacity: 0.92;
+    transform: scale(1) rotate(-9deg);
 }}
 .cm-stamp-ring {{
-    width: 54px;
-    height: 54px;
+    width: 58px;
+    height: 58px;
     border-radius: 50%;
     background: radial-gradient(circle at 35% 30%, #a8332f 0%, {SEAL_RED} 60%, #6e1414 100%);
     border: 2px solid {SEAL_RED};
-    box-shadow: inset 0 0 0 3px rgba(247,245,240,0.55);
+    box-shadow: inset 0 0 0 3px rgba(247,245,240,0.55),
+                0 1px 3px rgba(0,0,0,0.15);
     display: flex;
     align-items: center;
     justify-content: center;
+    position: relative;
+}}
+.cm-stamp-ring::before {{
+    content: "";
+    position: absolute;
+    inset: 5px;
+    border-radius: 50%;
+    border: 1px dashed rgba(247,245,240,0.55);
 }}
 .cm-stamp-text {{
     font-family: {FONT_MONO};
-    font-size: 0.42rem;
-    font-weight: 600;
+    font-size: 0.62rem;
+    font-weight: 700;
     letter-spacing: 0.04em;
     color: {PAPER};
     text-align: center;
+    line-height: 1;
+    text-shadow: 0 1px 1px rgba(0,0,0,0.25);
 }}
+
 @media (prefers-reduced-motion: reduce) {{
     .cm-card, .cm-stamp {{ transition: none !important; }}
+    .cm-card {{ opacity: 1; transform: none; }}
+    .cm-stamp {{ opacity: 0.92; transform: scale(1) rotate(-9deg); }}
+}}
+@media (max-width: 520px) {{
+    .cm-card {{ padding: 18px 64px 18px 18px; }}
+    .cm-stamp-ring {{ width: 46px; height: 46px; }}
+    .cm-stamp-text {{ font-size: 0.55rem; }}
 }}
 </style>
 
@@ -488,67 +812,124 @@ body {{ margin: 0; }}
     var reduceMotion = window.matchMedia &&
         window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    if (reduceMotion) {{
-        // Skip scroll/cross-frame machinery entirely — just show everything.
-        cards.forEach(function(card) {{ card.classList.add('cm-visible'); }});
-        return;
-    }}
-
     function reveal(card) {{
         var delay = parseInt(card.getAttribute('data-cm-delay') || '0', 10);
         setTimeout(function() {{ card.classList.add('cm-visible'); }}, delay);
     }}
 
-    // Try true scroll-linked reveal by reaching into the parent Streamlit
-    // page (components.v1.html() iframes are same-origin via srcdoc).
-    // Falls back to a staggered reveal-on-mount if cross-frame access is
-    // blocked for any reason — never leaves cards stuck invisible.
-    var usedCrossFrame = false;
-    try {{
-        var frameEl = window.frameElement;
-        var parentWin = window.parent;
-        if (frameEl && parentWin && parentWin !== window) {{
-            usedCrossFrame = true;
-
-            function checkVisible() {{
-                var frameRect = frameEl.getBoundingClientRect();
-                var vh = parentWin.innerHeight || 800;
-                cards.forEach(function(card) {{
-                    if (card.classList.contains('cm-visible')) return;
-                    var cardRect = card.getBoundingClientRect();
-                    var top = frameRect.top + cardRect.top;
-                    if (top < vh * 0.9) {{
-                        reveal(card);
-                    }}
-                }});
-            }}
-
-            parentWin.addEventListener('scroll', checkVisible, {{ passive: true }});
-            parentWin.addEventListener('resize', checkVisible);
-            checkVisible();
-            setTimeout(checkVisible, 300); // catch late layout settle
-        }}
-    }} catch (err) {{
-        usedCrossFrame = false;
+    if (reduceMotion) {{
+        cards.forEach(function(card) {{ card.classList.add('cm-visible'); }});
+    }} else if ('IntersectionObserver' in window) {{
+        var io = new IntersectionObserver(function(entries) {{
+            entries.forEach(function(entry) {{
+                if (entry.isIntersecting) {{
+                    reveal(entry.target);
+                    io.unobserve(entry.target);
+                }}
+            }});
+        }}, {{ threshold: 0.15, rootMargin: "-8% 0px -8% 0px" }});
+        cards.forEach(function(card) {{ io.observe(card); }});
+    }} else {{
+        cards.forEach(reveal);
     }}
 
-    if (!usedCrossFrame) {{
-        // Fallback: local IntersectionObserver (effectively reveal-on-mount
-        // inside the component's own iframe), staggered per card.
-        if ('IntersectionObserver' in window) {{
-            var io = new IntersectionObserver(function(entries) {{
-                entries.forEach(function(entry) {{
-                    if (entry.isIntersecting) {{
-                        reveal(entry.target);
-                        io.unobserve(entry.target);
-                    }}
-                }});
-            }}, {{ threshold: 0.15, rootMargin: "-10% 0px -10% 0px" }});
-            cards.forEach(function(card) {{ io.observe(card); }});
-        }} else {{
-            cards.forEach(reveal);
+    /* ── Auto-resize: stream this iframe's height up to Streamlit ───────
+       components.html() needs an integer pixel height. We measure the
+       actual layout height of our grid and post it to the parent window;
+       Streamlit's iframe host listens for these messages and resizes
+       the iframe accordingly. This avoids both scrollbars and clipping. */
+    function sendHeight() {{
+        var h = document.body.scrollHeight;
+        if (h > 0) {{
+            parent.postMessage({{
+                type: 'streamlit:setFrameHeight',
+                height: h + 8  // small bottom breathing room
+            }}, '*');
         }}
     }}
+    sendHeight();
+    // Re-measure after fonts load and after cards animate in
+    setTimeout(sendHeight, 200);
+    setTimeout(sendHeight, 800);
+    setTimeout(sendHeight, 1500);
+    if (window.ResizeObserver) {{
+        new ResizeObserver(sendHeight).observe(document.body);
+    }}
+    window.addEventListener('load', sendHeight);
 }})();
 </script>
 """
+
+
+# ============================================================================
+# 5. Footer signature block — bottom of the page
+# ============================================================================
+def render_footer() -> str:
+    """A quiet signature block at the foot of the notice, like the
+    'Issued by' line on a real government communication."""
+    return f"""
+<style>
+{GOOGLE_FONTS_IMPORT}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; }}
+.cm-footer {{
+    font-family: {FONT_BODY};
+    margin-top: 8px;
+    padding-top: 18px;
+    border-top: 1px solid {RULE_GREY};
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+    color: {INK};
+    opacity: 0.7;
+}}
+.cm-footer-left {{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}}
+.cm-footer-mark {{
+    font-family: {FONT_DISPLAY};
+    font-size: 1.1rem;
+    color: {NAVY};
+    font-weight: 600;
+}}
+.cm-footer-tag {{
+    font-family: {FONT_MONO};
+    font-size: 0.6rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: {INK};
+    opacity: 0.55;
+}}
+.cm-footer-meta {{
+    font-family: {FONT_MONO};
+    font-size: 0.62rem;
+    color: {INK};
+    opacity: 0.5;
+    text-align: right;
+    line-height: 1.5;
+}}
+</style>
+<div class="cm-footer">
+    <div class="cm-footer-left">
+        <span class="cm-footer-mark">&#9878;</span>
+        <div>
+            <div class="cm-footer-mark" style="font-size:0.9rem;">Issued by ComplianceMind</div>
+            <div class="cm-footer-tag">Cited compliance check &middot; not legal advice</div>
+        </div>
+    </div>
+    <div class="cm-footer-meta">
+        Generated on {{date}}<br>
+        Statutes reviewed: DPDP &middot; IT Act &middot; CPA &middot; GST
+    </div>
+</div>
+""".replace("{date}", _today_ist())
+
+
+def _today_ist() -> str:
+    """Return today's date formatted as '22 June 2026' — official style."""
+    import datetime
+    return datetime.date.today().strftime("%d %B %Y")
