@@ -1,55 +1,130 @@
-# ComplianceMind — Government Gazette UI Redesign
+# ComplianceMind
 
-Redesigned Streamlit UI for the hackathon_rag_law project, using a "government
-gazette / official notice" visual language: ivory paper, ink black, official
-navy, seal red, emblem gold. Each finding carries a CSS-drawn circular seal
-stamp bearing the act abbreviation (DPDP / ITA / CPA / GST / ECOM) — visually
-saying "this claim has been officially verified".
+**AI-Powered Legal Compliance for Indian SMEs**
 
-## Bugs fixed (vs original repo)
+A grounded, citation-first compliance assistant — built on Retrieval-Augmented Generation, not guesswork.
 
-| # | File | Bug | Fix |
-|---|------|-----|-----|
-| 1 | `app.py` | `st.iframe()` does not exist in Streamlit — both calls would crash on launch | Replaced with `streamlit.components.v1.html()` |
-| 2 | `app.py` | `height="content"` is invalid — `html()` requires an integer pixel height | Pass explicit integer heights; use postMessage auto-resize for variable-height cards |
-| 3 | `app.py` | Missing `streamlit.components.v1` import | Added `import streamlit.components.v1 as components` |
-| 4 | `pipeline.py` | `_client = Groq()` at module import time crashes the app if `GROQ_API_KEY` is unset, before any UI loads | Lazy singleton via `_get_client()` — created on first LLM call |
-| 5 | `pipeline.py` | Empty retrieval results would push the scoring LLM to hallucinate | Guard with a friendly "couldn't find relevant statutes" clarification message |
-| 6 | `pipeline.py` | Clarification logic checked `is None` on boolean fields — never triggered | Now driven by `is_vague` flag + empty string/list checks |
+> The Arch: RAG & Agentic AI Hackathon · Legal Services Track
 
-## How to run
+🔗 **Live Demo:** [hackathonraglaw-lztu5kmsrr5ayv7frbcefq.streamlit.app](https://hackathonraglaw-lztu5kmsrr5ayv7frbcefq.streamlit.app/)
+
+---
+
+## The Problem
+
+- **Legal Blind Spots** — Indian SMEs don't know which laws govern their operations (data collection, e-commerce, payments, and more).
+- **Hallucinated Advice** — Generic LLMs paraphrase legal guidance without grounding, which is dangerous in compliance contexts.
+- **The Real Need** — A system that retrieves actual statute text, not vague summaries or confident guesses.
+
+## Why ComplianceMind Is RAG — Not "Just ChatGPT"
+
+Every legal claim ComplianceMind makes is grounded in retrieved, verifiable source text from Indian statute law. The system cites the exact **Act, Section, and Rule** — not a vague summary. Reviewers can always ask "Where did that come from?" and get an exact clause back.
+
+| Generic LLM | ComplianceMind RAG |
+|---|---|
+| Paraphrased guesses | Retrieves actual statute text |
+| No citations | Cites Act + Section + Rule |
+| Hallucination risk | Verifiable sources |
+| Unverifiable output | Defensible output |
+
+## System Architecture
+
+```
+User Query → 4-Chain Orchestration → Final Report
+```
+
+A clean 4-chain orchestration ensures every stage's output feeds the next — from raw query to a fully cited compliance report.
+
+### The 4-Chain Pipeline
+
+`Intake → Retrieval → Scoring → Recommendation`
+
+Each stage's structured output feeds the next, ensuring the final report is grounded, scored, and actionable.
+
+**LLM provider:** Groq API (low-latency inference)
+
+## Knowledge Base
+
+12 statute sections sourced directly from primary government sources — `indiacode.nic.in` and official PDFs.
+
+| Source | Coverage |
+|---|---|
+| DPDP Act 2023 | Sec 4, 5, 6, 8 |
+| IT Act 2000 | Sec 43A, 72, 72A |
+| Consumer Protection Act 2019 | Sec 2(47) |
+| CP (E-Commerce) Rules 2020 | Rule 4 (3 sub-chunks) |
+| GST Act | Sec 22 |
+
+Vector store: **ChromaDB** (persistent, local) · Embedding model: **all-MiniLM-L6-v2**
+
+## Demo
+
+**Query:**
+> "I run an e-commerce store and collect customer phone numbers. What laws apply to me?"
+
+**Output:**
+- DPDP Act 2023 — Sec 5 (notice & consent obligations)
+- CP (E-Commerce) Rules 2020 — Rule 4(2) (grievance officer)
+- IT Act 2000 — Sec 43A (data breach liability)
+
+Every claim links to an exact Act + Section — fully auditable.
+
+## Tech Stack
+
+| Component | Role |
+|---|---|
+| **ChromaDB** | Persistent local vector store for statute embeddings (`all-MiniLM-L6-v2`) |
+| **Groq API** | Ultra-low-latency LLM inference powering all 4 orchestration stages |
+| **Streamlit** | Lightweight Python UI (`app.py`) for query input and report display |
+| **Python** | Full backend (`pipeline.py`) orchestrating retrieval, scoring, and generation |
+
+## Engineering Challenges & Fixes
+
+1. **False positives from large chunks** — Multi-topic Rule 4 chunks matched unrelated queries → split into 3 focused sub-chunks, improving retrieval precision.
+2. **Stale embeddings in ChromaDB** — "Ghost" embeddings persisted after corpus edits → rebuilt the vector store from scratch after structural changes.
+3. **Sparse corpus & negative queries** — Offline business queries returned weak matches → pushed relevance judgment into the LLM reasoning layer rather than relying on retrieval alone.
+
+## Why It Matters
+
+ComplianceMind helps non-lawyers self-assess compliance risk in plain language — grounded in real statute law, making it defensible, auditable, and trustworthy.
+
+## Known Limitations
+
+The 12-section corpus means sparse edge-case coverage. This is mitigated by downstream LLM reasoning rather than blind trust in retrieval.
+
+## Getting Started (Run Locally)
 
 ```bash
+# 1. Clone the repo
+git clone <your-repo-url>
+cd <your-repo-folder>
+
+# 2. Create a virtual environment
+python -m venv venv
+source venv/bin/activate      # On Windows: venv\Scripts\activate
+
+# 3. Install dependencies
 pip install -r requirements.txt
-export GROQ_API_KEY="your-key-here"
+
+# 4. Add your Groq API key
+echo "GROQ_API_KEY=your_key_here" > .env
+
+# 5. Run the app
 streamlit run app.py
 ```
 
-Open `http://localhost:8501` in your browser.
+The app will be live at:
 
-## Design system
+```
+http://localhost:8501
+```
 
-| Token | Value | Used for |
-|-------|-------|----------|
-| `PAPER` | `#F7F5F0` | ivory page background |
-| `INK` | `#1A1A1A` | body text |
-| `NAVY` | `#1B2A4A` | headings, primary button, accent text |
-| `SEAL_RED` | `#8C1D1D` | "gap" status, seal stamps |
-| `GOLD` | `#B08D57` | emblem rim, "unclear" status, accent rules |
-| `COMPLIANT_GREEN` | `#4C6B3F` | "compliant" status |
+## Roadmap
 
-**Typography:**
-- Display: Source Serif 4 (with Lora fallback) — headings, masthead, seal text
-- Body: IBM Plex Sans — UI text, descriptions
-- Mono: IBM Plex Mono — citations, reference numbers, status pills
+- Expand corpus coverage
+- Add re-ranking
+- Surface confidence scores
 
-**Custom components** (rendered via `components.v1.html()`):
-- `render_hero()` — letterhead masthead with file-reference number, CSS-drawn
-  emblem (layered radial gradient + gold rim + dashed inner ring), and tagline
-- `render_notice_header(findings)` — "NOTICE OF FINDINGS" masthead with live
-  tally of total / gaps / unclear / compliant counts
-- `render_finding_cards(sources, findings)` — per-finding cards with status
-  pills and CSS-drawn seal stamps bearing the act abbreviation; staggered
-  scroll-triggered reveal via IntersectionObserver; auto-resize via
-  postMessage protocol so the iframe always fits the content
-- `render_footer()` — "Issued by ComplianceMind" signature block with date
+---
+
+*Built for The Arch: RAG & Agentic AI Hackathon — Legal Services Track.*
