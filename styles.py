@@ -603,10 +603,10 @@ def render_finding_cards(sources: list[dict], findings: list[dict] | None = None
     visual element. The stamp lands with a slightly bouncier motion to
     feel like a rubber stamp being pressed onto paper.
 
-    Includes a JS auto-resize script that streams the iframe's measured
-    height up to the parent Streamlit page via postMessage, so the
-    components.html() container always fits the cards exactly — no
-    scrollbar, no clipped content.
+    Includes a staggered IntersectionObserver-based reveal animation. The
+    iframe height is computed up-front by estimate_cards_height() and
+    passed to components.html() — see that function's docstring for why
+    postMessage-based auto-resize is not used.
     """
     findings = findings or []
     status_by_section = {
@@ -832,30 +832,6 @@ body {{ margin: 0; }}
     }} else {{
         cards.forEach(reveal);
     }}
-
-    /* ── Auto-resize: stream this iframe's height up to Streamlit ───────
-       components.html() needs an integer pixel height. We measure the
-       actual layout height of our grid and post it to the parent window;
-       Streamlit's iframe host listens for these messages and resizes
-       the iframe accordingly. This avoids both scrollbars and clipping. */
-    function sendHeight() {{
-        var h = document.body.scrollHeight;
-        if (h > 0) {{
-            parent.postMessage({{
-                type: 'streamlit:setFrameHeight',
-                height: h + 8  // small bottom breathing room
-            }}, '*');
-        }}
-    }}
-    sendHeight();
-    // Re-measure after fonts load and after cards animate in
-    setTimeout(sendHeight, 200);
-    setTimeout(sendHeight, 800);
-    setTimeout(sendHeight, 1500);
-    if (window.ResizeObserver) {{
-        new ResizeObserver(sendHeight).observe(document.body);
-    }}
-    window.addEventListener('load', sendHeight);
 }})();
 </script>
 """
@@ -867,6 +843,7 @@ body {{ margin: 0; }}
 def render_footer() -> str:
     """A quiet signature block at the foot of the notice, like the
     'Issued by' line on a real government communication."""
+    date_str = _today_ist()
     return f"""
 <style>
 {GOOGLE_FONTS_IMPORT}
@@ -922,14 +899,80 @@ body {{ margin: 0; }}
         </div>
     </div>
     <div class="cm-footer-meta">
-        Generated on {{date}}<br>
+        Generated on {date_str}<br>
         Statutes reviewed: DPDP &middot; IT Act &middot; CPA &middot; GST
     </div>
 </div>
-""".replace("{date}", _today_ist())
+"""
 
 
 def _today_ist() -> str:
-    """Return today's date formatted as '22 June 2026' — official style."""
+    """Return today's date in Asia/Kolkata (IST), formatted as
+    '22 June 2026' — official style.
+
+    BUGFIX: original used datetime.date.today() which returns the UTC date,
+    not IST. Since the product is about Indian law and the footer reads as
+    an official communication, the date should be the Indian calendar date.
+    At UTC 19:00 (after 18:30), the date in India has already rolled over
+    but date.today() would still return yesterday.
+    """
     import datetime
-    return datetime.date.today().strftime("%d %B %Y")
+    try:
+        from zoneinfo import ZoneInfo  # Python 3.9+
+        ist_now = datetime.datetime.now(ZoneInfo("Asia/Kolkata"))
+        return ist_now.strftime("%d %B %Y")
+    except Exception:
+        # Fallback for environments without zoneinfo (e.g. older Python
+        # without tzdata installed) — IST is UTC+5:30.
+        utc_now = datetime.datetime.utcnow()
+        ist_now = utc_now + datetime.timedelta(hours=5, minutes=30)
+        return ist_now.strftime("%d %B %Y")
+
+
+def estimate_cards_height(sources: list[dict]) -> int:
+    """Estimate the rendered pixel height of the finding-cards block.
+
+    WHY THIS EXISTS:
+    streamlit.components.v1.html() takes a FIXED integer `height` argument.
+    Unlike custom declare_component() components, html() does NOT support
+    auto-resize via postMessage — any 'streamlit:setFrameHeight' messages
+    we send from inside the iframe are silently ignored by the host.
+
+    That means we MUST compute an accurate height up-front, otherwise
+    long statute texts (the corpus has sections up to ~6700 chars) get
+    silently clipped. With the original `len(sources) * 220` formula,
+    a 4-source result with the CPA Section 2(47) text would render at
+    ~3446px but get clipped to 880px — losing 75% of the cards.
+
+    Calculation:
+      Per card:
+        - 22px top padding + 22px bottom padding = 44px
+        - card-top (tag + status pill): ~28px including margin
+        - h4 (act name): one line ~22px (line-height 1.3 × 17px font)
+        - subtitle (title): ~21px (line-height 1.5 × 14px font) + 10px margin
+        - body (statute text): ceil(text_len / 90) lines × 22px line-height
+        = 130px fixed + body_height
+      Container:
+        - 4px top + 20px bottom padding (.cm-grid)
+        - 18px gap between cards
+        - +40px safety margin for font-rendering variance and the
+          IntersectionObserver reveal animation
+    """
+    if not sources:
+        return 120
+
+    CHARS_PER_LINE = 90      # at 13.6px font, ~660px content width
+    LINE_HEIGHT_PX = 22      # 0.85rem × 1.62 line-height
+    CARD_FIXED_PX = 130      # padding + tag + h4 + subtitle + margins
+    GAP_PX = 18
+    CONTAINER_PAD_PX = 30
+    SAFETY_PX = 60           # font-rendering variance + animation buffer
+
+    total = CONTAINER_PAD_PX
+    for src in sources:
+        text_len = len(src.get("text", "") or "")
+        body_lines = max(1, (text_len // CHARS_PER_LINE) + 1)
+        card_h = CARD_FIXED_PX + body_lines * LINE_HEIGHT_PX
+        total += card_h + GAP_PX
+
+    return total + SAFETY_PX

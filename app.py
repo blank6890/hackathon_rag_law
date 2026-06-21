@@ -14,12 +14,29 @@ BUGFIXES vs original:
   1. Replaced non-existent st.iframe() with components.v1.html().
   2. Removed invalid height="content" arg — html() needs an integer.
      We now pass an explicit pixel height for the hero (which is fixed)
-     and rely on the auto-resize postMessage protocol for the variable-
-     height finding cards.
+     and use estimate_cards_height() for the variable-height finding
+     cards (see fix #7 below).
   3. Imported streamlit.components.v1 explicitly.
   4. Added a "NOTICE OF FINDINGS" masthead above the report (per design
      brief) with a live tally of compliant / gap / unclear counts.
   5. Added a footer signature block.
+  6. Fixed _today_ist() in styles.py — original returned UTC date, not
+     IST. Now uses Asia/Kolkata timezone.
+  7. Fixed finding-cards height calculation — original used
+     `len(sources) * 220` which silently clipped long statute texts
+     (corpus has sections up to ~6700 chars; a 4-source result with
+     CPA Section 2(47) renders at ~3446px but the old formula gave
+     only 880px, clipping 75% of the cards). New helper
+     estimate_cards_height() computes an accurate height based on
+     actual text length per card.
+  8. Removed misleading postMessage('streamlit:setFrameHeight') JS —
+     that protocol only works for custom declare_component() components,
+     NOT for components.html(). The iframe height is now set correctly
+     up-front via estimate_cards_height(), and scrolling=True is used
+     as a safety net.
+  9. Cleaned up render_footer() — original used a fragile
+     .replace('{date}', ...) pattern that worked but was obscure and
+     would break if the date string ever contained { or }.
 """
 
 import streamlit as st
@@ -32,6 +49,7 @@ from styles import (
     render_notice_header,
     render_finding_cards,
     render_footer,
+    estimate_cards_height,
 )
 
 # ── Page config ─────────────────────────────────────────────────────────────
@@ -103,23 +121,26 @@ if run_button:
             # display:none elements always measure as 0px. If this defaulted
             # to collapsed, the cards iframe would lock in at 0 height
             # before the user ever opened the panel, and never re-measure.
-            # Defaulting open avoids the race entirely. The auto-resize
-            # postMessage in render_finding_cards() then handles the
-            # variable-height case correctly.
+            # Defaulting open avoids the race entirely.
             with st.expander("📚  Sources used (cited statute sections)",
                              expanded=True):
                 if not sources:
                     st.info("No sources were retrieved for this query.")
                 else:
-                    # Initial height is a guess; the embedded JS will
-                    # postMessage the true height up to Streamlit and the
-                    # iframe will resize. We use scrolling=False so any
-                    # residual miscalculation shows as blank space rather
-                    # than a nested scrollbar.
+                    # BUGFIX: original used `len(sources) * 220` which
+                    # silently clipped long statute texts (the corpus has
+                    # sections up to ~6700 chars; a 4-source result with
+                    # CPA Section 2(47) renders at ~3446px but the old
+                    # formula gave only 880px, clipping 75% of the cards).
+                    # estimate_cards_height() computes an accurate height
+                    # based on actual text length per card. We also pass
+                    # scrolling=True as a safety net for any residual
+                    # miscalculation (e.g. user has a very narrow viewport
+                    # that forces more line-wrapping than estimated).
                     components.html(
                         render_finding_cards(sources, findings),
-                        height=max(220, len(sources) * 220),
-                        scrolling=False,
+                        height=estimate_cards_height(sources),
+                        scrolling=True,
                     )
 
             # -- Footer signature block ------------------------------------

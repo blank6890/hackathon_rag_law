@@ -11,11 +11,15 @@ saying "this claim has been officially verified".
 | # | File | Bug | Fix |
 |---|------|-----|-----|
 | 1 | `app.py` | `st.iframe()` does not exist in Streamlit — both calls would crash on launch | Replaced with `streamlit.components.v1.html()` |
-| 2 | `app.py` | `height="content"` is invalid — `html()` requires an integer pixel height | Pass explicit integer heights; use postMessage auto-resize for variable-height cards |
+| 2 | `app.py` | `height="content"` is invalid — `html()` requires an integer pixel height | Pass explicit integer heights; new `estimate_cards_height()` helper computes accurate height per card |
 | 3 | `app.py` | Missing `streamlit.components.v1` import | Added `import streamlit.components.v1 as components` |
 | 4 | `pipeline.py` | `_client = Groq()` at module import time crashes the app if `GROQ_API_KEY` is unset, before any UI loads | Lazy singleton via `_get_client()` — created on first LLM call |
 | 5 | `pipeline.py` | Empty retrieval results would push the scoring LLM to hallucinate | Guard with a friendly "couldn't find relevant statutes" clarification message |
 | 6 | `pipeline.py` | Clarification logic checked `is None` on boolean fields — never triggered | Now driven by `is_vague` flag + empty string/list checks |
+| 7 | `styles.py` | `_today_ist()` was misnamed — returned UTC date, not IST (product is about Indian law; at UTC 19:00 the Indian date has already rolled over) | Now uses `zoneinfo.ZoneInfo("Asia/Kolkata")` with a UTC+5:30 fallback |
+| 8 | `app.py` + `styles.py` | **Finding cards silently clipped** — old `len(sources) * 220` formula gave 880px for a 4-source result, but real content with the 6727-char CPA Section 2(47) text renders at ~3446px. **75% of cards were invisible.** | New `estimate_cards_height(sources)` computes per-card height based on actual text length (chars-per-line × line-height × lines + fixed overhead). Plus `scrolling=True` as a safety net. |
+| 9 | `styles.py` | `render_finding_cards()` sent `postMessage('streamlit:setFrameHeight')` to the parent — but that protocol only works for custom `declare_component()` components, NOT for `components.html()`. Messages were silently ignored. | Removed the misleading JS. Height is now set correctly up-front via `estimate_cards_height()`. |
+| 10 | `styles.py` | `render_footer()` used a fragile `.replace('{date}', _today_ist())` pattern that worked but was obscure and would break if the date string ever contained `{` or `}` | Direct f-string interpolation: `Generated on {date_str}` |
 
 ## How to run
 
@@ -50,6 +54,9 @@ Open `http://localhost:8501` in your browser.
   tally of total / gaps / unclear / compliant counts
 - `render_finding_cards(sources, findings)` — per-finding cards with status
   pills and CSS-drawn seal stamps bearing the act abbreviation; staggered
-  scroll-triggered reveal via IntersectionObserver; auto-resize via
-  postMessage protocol so the iframe always fits the content
-- `render_footer()` — "Issued by ComplianceMind" signature block with date
+  scroll-triggered reveal via IntersectionObserver. Iframe height is computed
+  up-front by `estimate_cards_height(sources)` based on actual text length
+  per card (see bug fix #8 — `components.html()` doesn't support
+  postMessage auto-resize, so the height must be calculated server-side)
+- `render_footer()` — "Issued by ComplianceMind" signature block with
+  IST date (bug fix #7 — uses `Asia/Kolkata` timezone, not UTC)
