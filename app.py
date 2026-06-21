@@ -3,10 +3,17 @@ ComplianceMind — Streamlit UI
 
 A clean interface where a user describes their business and gets an
 AI-generated Indian legal compliance report with citations.
+
+Styling: "Government Gazette" design system (see styles.py). Native
+Streamlit widgets are restyled via CSS injection; the hero banner and
+finding cards are custom HTML/CSS/JS rendered through components.v1.html()
+for real scroll-triggered motion.
 """
 
 import streamlit as st
+
 from pipeline import run_pipeline
+from styles import get_global_css, render_hero, render_finding_cards
 
 # ── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -15,40 +22,11 @@ st.set_page_config(
     layout="centered",
 )
 
-# ── Custom styling ──────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-    /* Slightly tighter layout */
-    .block-container { max-width: 720px; }
+# ── Global styling (restyles native Streamlit widgets) ─────────────────────
+st.markdown(get_global_css(), unsafe_allow_html=True)
 
-    /* Source cards in the expander */
-    .source-card {
-        background: #f8f9fa;
-        border-left: 4px solid #4A90D9;
-        padding: 12px 16px;
-        margin-bottom: 10px;
-        border-radius: 4px;
-    }
-    .source-card h4 { margin: 0 0 4px 0; font-size: 0.95rem; }
-    .source-card p  { margin: 0; font-size: 0.88rem; color: #444; }
-    .source-card .section-tag {
-        display: inline-block;
-        background: #E3F2FD;
-        color: #1565C0;
-        font-size: 0.78rem;
-        padding: 2px 8px;
-        border-radius: 3px;
-        margin-bottom: 6px;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ── Header ──────────────────────────────────────────────────────────────────
-st.title("⚖️ ComplianceMind")
-st.caption(
-    "Describe your business in plain English and find out which Indian laws "
-    "apply — with every claim cited to a real statute section."
-)
+# ── Hero ─────────────────────────────────────────────────────────────────────
+st.iframe(render_hero(), height="content")
 
 # ── Input ───────────────────────────────────────────────────────────────────
 user_input = st.text_area(
@@ -82,19 +60,22 @@ if run_button:
             st.markdown("---")
             st.markdown(result["report"])
 
-            # -- Sources expander ------------------------------------------
+            # -- Sources expander (animated finding cards) ------------------
             st.markdown("---")
-            with st.expander("📚 Sources used", expanded=False):
-                if not result.get("sources"):
+            # NOTE: expanded=True is required here, not just a UX choice.
+            # st.iframe(height="content") measures the iframe's rendered
+            # layout height in the browser — but a *collapsed* expander
+            # hides its body with display:none, and display:none elements
+            # always measure as 0px. If this defaulted to collapsed, the
+            # cards iframe would lock in at 0 height before the user ever
+            # opened the panel, and never re-measure. Defaulting open avoids
+            # the race entirely.
+            with st.expander("📚 Sources used", expanded=True):
+                sources = result.get("sources") or []
+                if not sources:
                     st.info("No sources were retrieved for this query.")
                 else:
-                    for src in result["sources"]:
-                        st.markdown(
-                            f"""<div class="source-card">
-                                <span class="section-tag">{src['section']}</span>
-                                <h4>{src['act']}</h4>
-                                <p><strong>{src['title']}</strong></p>
-                                <p>{src['text']}</p>
-                            </div>""",
-                            unsafe_allow_html=True,
-                        )
+                    st.iframe(
+                        render_finding_cards(sources, result.get("findings")),
+                        height="content",
+                    )

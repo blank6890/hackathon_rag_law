@@ -8,6 +8,7 @@ All LLM calls go through the Groq SDK (reads GROQ_API_KEY from env).
 import json
 import os
 import textwrap
+from typing import Any
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -43,7 +44,7 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str,
 
 
 def _parse_json_with_retry(raw: str, model: str, system_prompt: str,
-                           user_prompt: str, temperature: float = 0) -> any:
+                           user_prompt: str, temperature: float = 0) -> Any:
     """Try to parse *raw* as JSON; on failure retry the LLM once with a
     stricter prompt, then raise a clear error."""
     # First attempt — try parsing what we got

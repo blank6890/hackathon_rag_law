@@ -11,7 +11,9 @@ def load_corpus(path="data/corpus.json"):
     with open(path) as f:
         corpus = json.load(f)
 
-    collection.add(
+    # NOTE: use upsert(), not add() — add() raises on duplicate ids, which
+    # would break re-running this whenever corpus.json changes.
+    collection.upsert(
         ids=[item["id"] for item in corpus],
         documents=[item["text"] for item in corpus],
         metadatas=[
