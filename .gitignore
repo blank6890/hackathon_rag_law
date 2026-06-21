@@ -11,7 +11,7 @@ __pycache__/
 venv/
 .venv/
 
-# ChromaDB local store
+# ChromaDB local store (auto-created on first run)
 chroma_db/
 
 # OS

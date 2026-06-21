@@ -1,130 +1,128 @@
-# ComplianceMind
+# ComplianceMind — Government Gazette UI
 
-**AI-Powered Legal Compliance for Indian SMEs**
+Redesigned Streamlit UI for the hackathon_rag_law project, using a "government
+gazette / official notice" visual language: ivory paper, ink black, official
+navy, seal red, emblem gold. Each finding carries a CSS-drawn circular seal
+stamp bearing the act abbreviation (DPDP / ITA / CPA / GST / ECOM) — visually
+saying "this claim has been officially verified".
 
-A grounded, citation-first compliance assistant — built on Retrieval-Augmented Generation, not guesswork.
+## Features
 
-> The Arch: RAG & Agentic AI Hackathon · Legal Services Track
+### All Tier 1 + 2 features (v4)
 
-🔗 **Live Demo:** [hackathonraglaw-lztu5kmsrr5ayv7frbcefq.streamlit.app](https://hackathonraglaw-lztu5kmsrr5ayv7frbcefq.streamlit.app/)
+#### Tier 1 — High impact
+1. **Compliance Score (0–100) with letter grade** — CSS conic-gradient gauge.
+   Formula: `100 - 25×critical_gaps - 12×major_gaps - 5×minor_gaps - 3×unclear`
+2. **Before/After Action Plan** — interactive checklist where each gap/unclear
+   finding becomes a checkbox. As you check items off, the score recalculates
+   live (resolved gaps are treated as compliant).
+3. **PDF certificate download** — exports the whole notice as a PDF matching
+   the gazette aesthetic (ReportLab, ivory background, score gauge as a
+   colored ring).
+4. **Plain-English ↔ Legalese toggle** — radio toggle at the top of the
+   report. "Plain English" shows the LLM's summary; "Full statute text"
+   shows the actual section text in `st.info` boxes.
+5. **Comparison mode** — toggle to "Compare two businesses", enter two
+   descriptions side-by-side, get two score gauges + a verdict showing
+   which wins and by how many points.
+6. **Industry presets** — 5 one-click templates (EdTech, Fintech UPI,
+   D2C E-commerce, Health App, SaaS B2B).
+7. **Risk timeline** — horizontal timeline with a node per enforcement
+   trigger. Critical/major/minor nodes are colored red/orange/gold; active
+   gaps get a larger ring.
 
----
+#### Tier 2 — Polish & depth
+8. **Citation trust score** — each finding is tagged "DIRECT MATCH" (the
+   section text directly addresses the business's situation) or "INFERRED"
+   (LLM reasoned by analogy). Shown as a dotted-border badge on each card.
+9. **Ask-a-follow-up chat** — after the report, a `st.chat_input` box
+   lets the user ask questions grounded in the same findings/sources.
+   Uses `answer_followup()` in pipeline.py.
+10. **History sidebar** — `st.session_state.history` stores the last 10
+    checks (description, score, grade, timestamp). Click any item to reload.
+11. **Multilingual notice** — sidebar language picker (English / Hindi /
+    Tamil / Bengali). Calls `translate_report()` which uses Groq to
+    translate the markdown report while keeping act names + citations
+    in English.
+12. **Severity weights + cost estimator** — each finding has
+    `critical`/`major`/`minor` severity + `penalty_range` extracted from
+    the statute text (e.g. "Up to Rs. 250 crore penalty").
+13. **Real ChromaDB retrieval** — semantic search via `all-MiniLM-L6-v2`
+    embeddings. Corpus auto-loads on first use.
+14. **Role tags** — each finding is tagged with who should care:
+    Founder / Legal / Engineering / DPO / Finance. Shown as a colored
+    pill with 👤 icon.
+15. **Shareable URL** — sidebar shows a `?q=<encoded_desc>` query string
+    for the last check. On load, the app checks `st.query_params` for a
+    `q` param and pre-fills the textarea.
 
-## The Problem
+## Bugs fixed (vs original repo)
 
-- **Legal Blind Spots** — Indian SMEs don't know which laws govern their operations (data collection, e-commerce, payments, and more).
-- **Hallucinated Advice** — Generic LLMs paraphrase legal guidance without grounding, which is dangerous in compliance contexts.
-- **The Real Need** — A system that retrieves actual statute text, not vague summaries or confident guesses.
+| # | File | Bug | Fix |
+|---|------|-----|-----|
+| 1 | `app.py` | `st.iframe()` does not exist in Streamlit — both calls would crash on launch | Replaced with `streamlit.components.v1.html()` |
+| 2 | `app.py` | `height="content"` is invalid — `html()` requires an integer pixel height | Pass explicit integer heights; new `estimate_cards_height()` helper computes accurate height per card |
+| 3 | `app.py` | Missing `streamlit.components.v1` import | Added `import streamlit.components.v1 as components` |
+| 4 | `pipeline.py` | `_client = Groq()` at module import time crashes the app if `GROQ_API_KEY` is unset, before any UI loads | Lazy singleton via `_get_client()` — created on first LLM call |
+| 5 | `pipeline.py` | Empty retrieval results would push the scoring LLM to hallucinate | Guard with a friendly "couldn't find relevant statutes" clarification message |
+| 6 | `pipeline.py` | Clarification logic checked `is None` on boolean fields — never triggered | Now driven by `is_vague` flag + empty string/list checks |
+| 7 | `styles.py` | `_today_ist()` was misnamed — returned UTC date, not IST (product is about Indian law; at UTC 19:00 the Indian date has already rolled over) | Now uses `zoneinfo.ZoneInfo("Asia/Kolkata")` with a UTC+5:30 fallback |
+| 8 | `app.py` + `styles.py` | **Finding cards silently clipped** — old `len(sources) * 220` formula gave 880px for a 4-source result, but real content with the 6727-char CPA Section 2(47) text renders at ~3446px. **75% of cards were invisible.** | New `estimate_cards_height(sources, findings)` computes per-card height based on actual text length + penalty rows. Plus `scrolling=True` as a safety net. |
+| 9 | `styles.py` | `render_finding_cards()` sent `postMessage('streamlit:setFrameHeight')` to the parent — but that protocol only works for custom `declare_component()` components, NOT for `components.html()`. Messages were silently ignored. | Removed the misleading JS. Height is now set correctly up-front via `estimate_cards_height()`. |
+| 10 | `styles.py` | `render_footer()` used a fragile `.replace('{date}', _today_ist())` pattern that worked but was obscure and would break if the date string ever contained `{` or `}` | Direct f-string interpolation: `Generated on {date_str}` |
+| 11 | `retrieval.py` | `chromadb.PersistentClient` was created at module-import time, holding a stale SQLite connection if the DB folder was deleted between runs | Lazy `_get_collection()` — creates client on first use |
+| 12 | `pdf_export.py` | ReportLab `Canvas.wedge()` doesn't accept keyword args (`startAngle=`, `extent=`) | Pass them positionally: `c.wedge(x1, y1, x2, y2, 90, -(score*3.6), fill=1, stroke=0)` |
 
-## Why ComplianceMind Is RAG — Not "Just ChatGPT"
-
-Every legal claim ComplianceMind makes is grounded in retrieved, verifiable source text from Indian statute law. The system cites the exact **Act, Section, and Rule** — not a vague summary. Reviewers can always ask "Where did that come from?" and get an exact clause back.
-
-| Generic LLM | ComplianceMind RAG |
-|---|---|
-| Paraphrased guesses | Retrieves actual statute text |
-| No citations | Cites Act + Section + Rule |
-| Hallucination risk | Verifiable sources |
-| Unverifiable output | Defensible output |
-
-## System Architecture
-
-```
-User Query → 4-Chain Orchestration → Final Report
-```
-
-A clean 4-chain orchestration ensures every stage's output feeds the next — from raw query to a fully cited compliance report.
-
-### The 4-Chain Pipeline
-
-`Intake → Retrieval → Scoring → Recommendation`
-
-Each stage's structured output feeds the next, ensuring the final report is grounded, scored, and actionable.
-
-**LLM provider:** Groq API (low-latency inference)
-
-## Knowledge Base
-
-12 statute sections sourced directly from primary government sources — `indiacode.nic.in` and official PDFs.
-
-| Source | Coverage |
-|---|---|
-| DPDP Act 2023 | Sec 4, 5, 6, 8 |
-| IT Act 2000 | Sec 43A, 72, 72A |
-| Consumer Protection Act 2019 | Sec 2(47) |
-| CP (E-Commerce) Rules 2020 | Rule 4 (3 sub-chunks) |
-| GST Act | Sec 22 |
-
-Vector store: **ChromaDB** (persistent, local) · Embedding model: **all-MiniLM-L6-v2**
-
-## Demo
-
-**Query:**
-> "I run an e-commerce store and collect customer phone numbers. What laws apply to me?"
-
-**Output:**
-- DPDP Act 2023 — Sec 5 (notice & consent obligations)
-- CP (E-Commerce) Rules 2020 — Rule 4(2) (grievance officer)
-- IT Act 2000 — Sec 43A (data breach liability)
-
-Every claim links to an exact Act + Section — fully auditable.
-
-## Tech Stack
-
-| Component | Role |
-|---|---|
-| **ChromaDB** | Persistent local vector store for statute embeddings (`all-MiniLM-L6-v2`) |
-| **Groq API** | Ultra-low-latency LLM inference powering all 4 orchestration stages |
-| **Streamlit** | Lightweight Python UI (`app.py`) for query input and report display |
-| **Python** | Full backend (`pipeline.py`) orchestrating retrieval, scoring, and generation |
-
-## Engineering Challenges & Fixes
-
-1. **False positives from large chunks** — Multi-topic Rule 4 chunks matched unrelated queries → split into 3 focused sub-chunks, improving retrieval precision.
-2. **Stale embeddings in ChromaDB** — "Ghost" embeddings persisted after corpus edits → rebuilt the vector store from scratch after structural changes.
-3. **Sparse corpus & negative queries** — Offline business queries returned weak matches → pushed relevance judgment into the LLM reasoning layer rather than relying on retrieval alone.
-
-## Why It Matters
-
-ComplianceMind helps non-lawyers self-assess compliance risk in plain language — grounded in real statute law, making it defensible, auditable, and trustworthy.
-
-## Known Limitations
-
-The 12-section corpus means sparse edge-case coverage. This is mitigated by downstream LLM reasoning rather than blind trust in retrieval.
-
-## Getting Started (Run Locally)
+## How to run
 
 ```bash
-# 1. Clone the repo
-git clone <your-repo-url>
-cd <your-repo-folder>
-
-# 2. Create a virtual environment
-python -m venv venv
-source venv/bin/activate      # On Windows: venv\Scripts\activate
-
-# 3. Install dependencies
 pip install -r requirements.txt
-
-# 4. Add your Groq API key
-echo "GROQ_API_KEY=your_key_here" > .env
-
-# 5. Run the app
+export GROQ_API_KEY="your-key-here"
 streamlit run app.py
 ```
 
-The app will be live at:
+Open `http://localhost:8501` in your browser.
 
-```
-http://localhost:8501
-```
+**First run:** ChromaDB will download the `all-MiniLM-L6-v2` embedding model
+(~80 MB, one-time) and auto-load the 12-section corpus from `data/corpus.json`.
+Subsequent runs reuse the cached model and persistent DB.
 
-## Roadmap
+## Design system
 
-- Expand corpus coverage
-- Add re-ranking
-- Surface confidence scores
+| Token | Value | Used for |
+|-------|-------|----------|
+| `PAPER` | `#F7F5F0` | ivory page background |
+| `INK` | `#1A1A1A` | body text |
+| `NAVY` | `#1B2A4A` | headings, primary button, accent text |
+| `SEAL_RED` | `#8C1D1D` | "gap" status, seal stamps, critical severity |
+| `GOLD` | `#B08D57` | emblem rim, "unclear" status, minor severity, accent rules |
+| `COMPLIANT_GREEN` | `#4C6B3F` | "compliant" status, grade A |
+| `MAJOR_ORANGE` | `#C97A1D` | major severity (between red and gold) |
 
----
+**Typography:**
+- Display: Source Serif 4 (with Lora fallback) — headings, masthead, seal text
+- Body: IBM Plex Sans — UI text, descriptions
+- Mono: IBM Plex Mono — citations, reference numbers, status pills
 
-*Built for The Arch: RAG & Agentic AI Hackathon — Legal Services Track.*
+**Custom components** (rendered via `components.v1.html()`):
+- `render_hero()` — letterhead masthead with file-reference number, CSS-drawn
+  emblem (layered radial gradient + gold rim + dashed inner ring), and tagline
+- `render_notice_header(findings, score, grade, grade_color, score_summary)` —
+  "NOTICE OF FINDINGS" masthead with a CSS conic-gradient score gauge, live
+  tally of total / gaps / unclear / compliant / critical / major, and the
+  one-line score summary
+- `render_finding_cards(sources, findings)` — per-finding cards with status
+  pills, severity badges, penalty exposure rows, and CSS-drawn seal stamps
+  bearing the act abbreviation. Staggered scroll-triggered reveal via
+  IntersectionObserver. Iframe height computed up-front by
+  `estimate_cards_height(sources, findings)` based on actual text length
+  per card + penalty rows
+- `render_footer()` — "Issued by ComplianceMind" signature block with
+  IST date (uses `Asia/Kolkata` timezone, not UTC)
+
+**PDF export** (`pdf_export.py`):
+- `generate_certificate(business_desc, findings, sources, score, grade, ...)` →
+  PDF bytes. Uses ReportLab with built-in fonts (Times, Helvetica, Courier)
+  so it renders identically on any system. Currency written as "Rs." (not
+  the rupee symbol) to avoid font-coverage issues. Score gauge drawn as a
+  colored ring via `Canvas.wedge()`.

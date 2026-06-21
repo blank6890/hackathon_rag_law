@@ -68,6 +68,41 @@ _STATUS_LABELS = {
     "unclear": "UNCLEAR",
 }
 
+# ── Severity colors for findings (critical/major/minor) ────────────────────
+# These are used for the severity badge on each finding card, and for the
+# score breakdown in the notice header.
+_SEVERITY_COLORS = {
+    "critical": SEAL_RED,         # same as gap — critical gaps are the worst
+    "major": "#C97A1D",           # a distinct orange-rust, between red and gold
+    "minor": GOLD,                # mild — gold
+}
+
+_SEVERITY_LABELS = {
+    "critical": "CRITICAL",
+    "major": "MAJOR",
+    "minor": "MINOR",
+}
+
+# ── Role colors (who in the org should care) ────────────────────────────────
+# Each role gets a distinct muted color so role tags are scannable at a glance.
+_ROLE_COLORS = {
+    "Founder":    "#1B2A4A",   # navy — strategic
+    "Legal":      "#8C1D1D",   # seal red — legal review
+    "Engineering":"#4C6B3F",   # green — technical
+    "DPO":        "#B08D57",   # gold — privacy
+    "Finance":    "#C97A1D",   # orange — money
+}
+
+# ── Citation trust colors ───────────────────────────────────────────────────
+_TRUST_COLORS = {
+    "direct": COMPLIANT_GREEN,    # green — section directly addresses it
+    "inferred": GOLD,             # gold — LLM reasoned by analogy
+}
+_TRUST_LABELS = {
+    "direct": "DIRECT MATCH",
+    "inferred": "INFERRED",
+}
+
 # ── Act abbreviation lookup for seal stamps ────────────────────────────────
 # Each finding's seal bears the abbreviation of the act it cites — visually
 # echoing how a real government stamp bears the issuing department's seal.
@@ -452,19 +487,52 @@ body {{ margin: 0; }}
 # ============================================================================
 # 3. NOTICE OF FINDINGS masthead — frames the results section
 # ============================================================================
-def render_notice_header(findings: list[dict] | None = None) -> str:
+def render_notice_header(
+    findings: list[dict] | None = None,
+    score: int | None = None,
+    grade: str = "",
+    grade_color: str = "",
+    score_summary: str = "",
+) -> str:
     """A formal 'NOTICE OF FINDINGS' masthead that sits above the report.
 
-    Doubles as a summary stat block: counts of compliant / gap / unclear
-    items are shown as small mono-set tallies on the right, like a docket.
+    Features:
+      - Big circular score gauge (0-100) with letter grade inside, drawn
+        purely in CSS (conic-gradient ring + center disc). The ring color
+        reflects the grade.
+      - Summary tally: total / gaps / unclear / compliant
+      - One-line score summary from the pipeline
     """
     findings = findings or []
     counts = {"compliant": 0, "gap": 0, "unclear": 0}
+    severity_counts = {"critical": 0, "major": 0, "minor": 0}
     for f in findings:
         s = (f.get("status") or "").lower()
         if s in counts:
             counts[s] += 1
+        sev = (f.get("severity") or "minor").lower()
+        if sev in severity_counts:
+            severity_counts[sev] += 1
     total = sum(counts.values())
+
+    # Score gauge — only render if score is provided
+    has_score = score is not None
+    gauge_html = ""
+    if has_score:
+        # Clamp score for the conic-gradient degree calculation
+        s_clamped = max(0, min(100, int(score)))
+        ring_deg = s_clamped * 3.6  # 100 * 3.6 = 360
+        ring_color = grade_color or NAVY
+        grade = grade or "—"
+        gauge_html = f"""
+        <div class="cm-score-gauge" style="--ring-color:{ring_color}; --ring-deg:{ring_deg}deg;">
+            <div class="cm-score-inner">
+                <span class="cm-score-num">{s_clamped}</span>
+                <span class="cm-score-grade" style="color:{ring_color}">{grade}</span>
+            </div>
+            <span class="cm-score-label">Compliance Score</span>
+        </div>
+        """
 
     return f"""
 <style>
@@ -501,6 +569,15 @@ body {{ margin: 0; }}
     border-radius: 50%;
     pointer-events: none;
 }}
+.cm-notice-body {{
+    display: flex;
+    gap: 28px;
+    align-items: flex-start;
+}}
+.cm-notice-text {{
+    flex: 1;
+    min-width: 0;
+}}
 .cm-notice-eyebrow {{
     font-family: {FONT_MONO};
     font-size: 0.62rem;
@@ -521,14 +598,96 @@ body {{ margin: 0; }}
     font-size: 0.88rem;
     color: {INK};
     opacity: 0.7;
-    margin: 0 0 14px 0;
+    margin: 0 0 8px 0;
     max-width: 52ch;
+    line-height: 1.5;
 }}
+.cm-score-summary {{
+    font-family: {FONT_MONO};
+    font-size: 0.72rem;
+    color: {NAVY};
+    background: rgba(27,42,74,0.05);
+    border-left: 3px solid {GOLD};
+    padding: 6px 10px;
+    margin: 8px 0 0 0;
+    line-height: 1.4;
+    border-radius: 0 4px 4px 0;
+}}
+
+/* ── Score gauge — pure CSS conic-gradient ring ────────────────────────
+   The ring fills clockwise from 12 o'clock based on the score (0-100).
+   Inner disc is ivory to match the page background, with the score number
+   in display serif and the grade letter below it. */
+.cm-score-gauge {{
+    flex: 0 0 auto;
+    width: 110px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    position: relative;
+    padding: 4px 0;
+}}
+.cm-score-gauge::before {{
+    content: "";
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    /* Conic gradient: filled arc in ring-color, remaining in light grey */
+    background: conic-gradient(
+        var(--ring-color) 0deg var(--ring-deg),
+        rgba(27,42,74,0.10) var(--ring-deg) 360deg
+    );
+    display: block;
+    position: relative;
+}}
+.cm-score-inner {{
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    background: #FFFFFF;
+    border: 1px solid rgba(27,42,74,0.08);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.04);
+}}
+.cm-score-num {{
+    font-family: {FONT_DISPLAY};
+    font-size: 1.7rem;
+    font-weight: 700;
+    color: {NAVY};
+    line-height: 1;
+}}
+.cm-score-grade {{
+    font-family: {FONT_MONO};
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    margin-top: 2px;
+}}
+.cm-score-label {{
+    font-family: {FONT_MONO};
+    font-size: 0.56rem;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: {INK};
+    opacity: 0.6;
+    text-align: center;
+}}
+
 .cm-notice-tally {{
     display: flex;
     gap: 18px;
     flex-wrap: wrap;
     padding-top: 12px;
+    margin-top: 14px;
     border-top: 1px dashed {RULE_GREY};
 }}
 .cm-tally-item {{
@@ -546,6 +705,9 @@ body {{ margin: 0; }}
 .cm-tally-num.is-gap {{ color: {SEAL_RED}; }}
 .cm-tally-num.is-compliant {{ color: {COMPLIANT_GREEN}; }}
 .cm-tally-num.is-unclear {{ color: {GOLD}; }}
+.cm-tally-num.is-critical {{ color: {SEAL_RED}; }}
+.cm-tally-num.is-major {{ color: #C97A1D; }}
+.cm-tally-num.is-minor {{ color: {GOLD}; }}
 .cm-tally-label {{
     font-family: {FONT_MONO};
     font-size: 0.6rem;
@@ -557,30 +719,49 @@ body {{ margin: 0; }}
 @media (prefers-reduced-motion: reduce) {{
     .cm-notice {{ animation: none; opacity: 1; transform: none; }}
 }}
+@media (max-width: 520px) {{
+    .cm-notice-body {{ flex-direction: column; align-items: center; }}
+    .cm-notice-text {{ text-align: center; }}
+    .cm-score-summary {{ text-align: left; }}
+}}
 </style>
 
 <div class="cm-notice">
-    <div class="cm-notice-eyebrow">Official Communication</div>
-    <h2 class="cm-notice-title">Notice of Findings</h2>
-    <p class="cm-notice-sub">The following compliance assessment has been
-       prepared from the business description you submitted. Each finding
-       is grounded in a specific provision of Indian statute law.</p>
-    <div class="cm-notice-tally">
-        <div class="cm-tally-item">
-            <span class="cm-tally-num">{total}</span>
-            <span class="cm-tally-label">Total Reviewed</span>
-        </div>
-        <div class="cm-tally-item">
-            <span class="cm-tally-num is-gap">{counts['gap']}</span>
-            <span class="cm-tally-label">Gaps Found</span>
-        </div>
-        <div class="cm-tally-item">
-            <span class="cm-tally-num is-unclear">{counts['unclear']}</span>
-            <span class="cm-tally-label">Unclear</span>
-        </div>
-        <div class="cm-tally-item">
-            <span class="cm-tally-num is-compliant">{counts['compliant']}</span>
-            <span class="cm-tally-label">Compliant</span>
+    <div class="cm-notice-body">
+        {gauge_html if has_score else ''}
+        <div class="cm-notice-text">
+            <div class="cm-notice-eyebrow">Official Communication</div>
+            <h2 class="cm-notice-title">Notice of Findings</h2>
+            <p class="cm-notice-sub">The following compliance assessment has been
+               prepared from the business description you submitted. Each finding
+               is grounded in a specific provision of Indian statute law.</p>
+            {f'<p class="cm-score-summary">{html.escape(score_summary)}</p>' if score_summary else ''}
+            <div class="cm-notice-tally">
+                <div class="cm-tally-item">
+                    <span class="cm-tally-num">{total}</span>
+                    <span class="cm-tally-label">Total Reviewed</span>
+                </div>
+                <div class="cm-tally-item">
+                    <span class="cm-tally-num is-gap">{counts['gap']}</span>
+                    <span class="cm-tally-label">Gaps Found</span>
+                </div>
+                <div class="cm-tally-item">
+                    <span class="cm-tally-num is-unclear">{counts['unclear']}</span>
+                    <span class="cm-tally-label">Unclear</span>
+                </div>
+                <div class="cm-tally-item">
+                    <span class="cm-tally-num is-compliant">{counts['compliant']}</span>
+                    <span class="cm-tally-label">Compliant</span>
+                </div>
+                {f'''<div class="cm-tally-item">
+                    <span class="cm-tally-num is-critical">{severity_counts['critical']}</span>
+                    <span class="cm-tally-label">Critical</span>
+                </div>''' if severity_counts['critical'] else ''}
+                {f'''<div class="cm-tally-item">
+                    <span class="cm-tally-num is-major">{severity_counts['major']}</span>
+                    <span class="cm-tally-label">Major</span>
+                </div>''' if severity_counts['major'] else ''}
+            </div>
         </div>
     </div>
 </div>
@@ -610,7 +791,7 @@ def render_finding_cards(sources: list[dict], findings: list[dict] | None = None
     """
     findings = findings or []
     status_by_section = {
-        (f.get("act"), f.get("section")): f.get("status") for f in findings
+        (f.get("act"), f.get("section")): f for f in findings
     }
 
     cards_html = []
@@ -619,22 +800,60 @@ def render_finding_cards(sources: list[dict], findings: list[dict] | None = None
         section = html.escape(src.get("section", ""))
         title = html.escape(src.get("title", ""))
         text = html.escape(src.get("text", ""))
-        status = status_by_section.get((src.get("act"), src.get("section")))
+        finding = status_by_section.get((src.get("act"), src.get("section"))) or {}
+        status = finding.get("status")
+        severity = (finding.get("severity") or "minor").lower()
+        penalty_range = finding.get("penalty_range") or "Not specified in section"
+        citation_trust = (finding.get("citation_trust") or "inferred").lower()
+        role = finding.get("role") or "Founder"
+        enforcement_trigger = finding.get("enforcement_trigger") or "Immediate"
+
         status_color = _STATUS_COLORS.get(status, GOLD) if status else GOLD
         status_label = html.escape(_status_label(status)) if status else ""
+        severity_color = _SEVERITY_COLORS.get(severity, GOLD)
+        severity_label = _SEVERITY_LABELS.get(severity, severity.upper())
+        trust_color = _TRUST_COLORS.get(citation_trust, GOLD)
+        trust_label = _TRUST_LABELS.get(citation_trust, "INFERRED")
+        role_color = _ROLE_COLORS.get(role, NAVY)
         act_abbr = html.escape(_act_abbreviation(src.get("act", "")))
 
         delay_ms = i * 90  # staggered reveal across cards
 
+        # Build the badge row: section tag + status pill + severity pill + trust badge
+        badges = f'<span class="cm-tag">{section}</span>'
+        if status_label:
+            badges += f'<span class="cm-status" style="--status-color:{status_color}">{status_label}</span>'
+            badges += f'<span class="cm-severity" style="--sev-color:{severity_color}">{severity_label}</span>'
+            badges += f'<span class="cm-trust" style="--trust-color:{trust_color}">{trust_label}</span>'
+
+        # Meta row: role tag + enforcement trigger
+        meta_row = f"""
+        <div class="cm-meta-row">
+            <span class="cm-role" style="--role-color:{role_color}">👤 {html.escape(role)}</span>
+            <span class="cm-trigger">⏱ {html.escape(enforcement_trigger)}</span>
+        </div>
+        """
+
+        # Penalty row — only show if there's an actual penalty mentioned
+        penalty_html = ""
+        if penalty_range and penalty_range != "Not specified in section":
+            penalty_html = f"""
+            <div class="cm-penalty">
+                <span class="cm-penalty-label">Penalty exposure:</span>
+                <span class="cm-penalty-value">{html.escape(penalty_range)}</span>
+            </div>
+            """
+
         cards_html.append(f"""
         <article class="cm-card" data-cm-delay="{delay_ms}">
             <div class="cm-card-top">
-                <span class="cm-tag">{section}</span>
-                {f'<span class="cm-status" style="--status-color:{status_color}">{status_label}</span>' if status_label else ''}
+                {badges}
             </div>
             <h4>{act}</h4>
             <p class="cm-card-subtitle"><strong>{title}</strong></p>
+            {meta_row}
             <p class="cm-card-body">{text}</p>
+            {penalty_html}
             <div class="cm-stamp" aria-hidden="true" title="Verified: {act_abbr}">
                 <div class="cm-stamp-ring">
                     <span class="cm-stamp-text">{act_abbr}</span>
@@ -715,6 +934,92 @@ body {{ margin: 0; }}
     height: 6px;
     border-radius: 50%;
     background: var(--status-color);
+}}
+.cm-severity {{
+    font-family: {FONT_MONO};
+    font-size: 0.58rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--sev-color);
+    padding: 3px 8px;
+    background: color-mix(in srgb, var(--sev-color) 10%, transparent);
+    border-radius: 4px;
+    /* No border — severity is a secondary badge, lighter visual weight
+       than the status pill. */
+}}
+/* Fallback for browsers without color-mix (older Safari) —
+   use a semi-transparent overlay via box-shadow inset. */
+@supports not (background: color-mix(in srgb, red 10%, transparent)) {{
+    .cm-severity {{
+        background: rgba(140, 29, 29, 0.08);
+    }}
+}}
+.cm-penalty {{
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: rgba(140, 29, 29, 0.04);
+    border-left: 3px solid {SEAL_RED};
+    border-radius: 0 4px 4px 0;
+    font-family: {FONT_MONO};
+    font-size: 0.72rem;
+    line-height: 1.4;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: baseline;
+}}
+.cm-penalty-label {{
+    color: {INK};
+    opacity: 0.55;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}}
+.cm-penalty-value {{
+    color: {SEAL_RED};
+    font-weight: 600;
+}}
+/* Citation trust badge — small, secondary visual weight */
+.cm-trust {{
+    font-family: {FONT_MONO};
+    font-size: 0.54rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--trust-color);
+    padding: 2px 6px;
+    border: 1px dotted var(--trust-color);
+    border-radius: 3px;
+    opacity: 0.85;
+}}
+/* Meta row: role tag + enforcement trigger, sits between subtitle and body */
+.cm-meta-row {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0 0 8px 0;
+    align-items: center;
+}}
+.cm-role {{
+    font-family: {FONT_MONO};
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: var(--role-color);
+    padding: 2px 8px;
+    background: color-mix(in srgb, var(--role-color) 8%, transparent);
+    border-radius: 10px;
+    white-space: nowrap;
+}}
+@supports not (background: color-mix(in srgb, red 10%, transparent)) {{
+    .cm-role {{ background: rgba(27,42,74,0.06); }}
+}}
+.cm-trigger {{
+    font-family: {FONT_MONO};
+    font-size: 0.6rem;
+    color: {INK};
+    opacity: 0.6;
+    white-space: nowrap;
 }}
 .cm-card h4 {{
     font-family: {FONT_DISPLAY};
@@ -929,7 +1234,7 @@ def _today_ist() -> str:
         return ist_now.strftime("%d %B %Y")
 
 
-def estimate_cards_height(sources: list[dict]) -> int:
+def estimate_cards_height(sources: list[dict], findings: list[dict] | None = None) -> int:
     """Estimate the rendered pixel height of the finding-cards block.
 
     WHY THIS EXISTS:
@@ -947,11 +1252,12 @@ def estimate_cards_height(sources: list[dict]) -> int:
     Calculation:
       Per card:
         - 22px top padding + 22px bottom padding = 44px
-        - card-top (tag + status pill): ~28px including margin
+        - card-top (tag + status pill + severity pill): ~28px including margin
         - h4 (act name): one line ~22px (line-height 1.3 × 17px font)
         - subtitle (title): ~21px (line-height 1.5 × 14px font) + 10px margin
         - body (statute text): ceil(text_len / 90) lines × 22px line-height
-        = 130px fixed + body_height
+        - penalty row (if present): ~36px (8px padding × 2 + ~14px text + 10px margin)
+        = ~130px fixed + body_height + (36 if penalty else 0)
       Container:
         - 4px top + 20px bottom padding (.cm-grid)
         - 18px gap between cards
@@ -963,16 +1269,657 @@ def estimate_cards_height(sources: list[dict]) -> int:
 
     CHARS_PER_LINE = 90      # at 13.6px font, ~660px content width
     LINE_HEIGHT_PX = 22      # 0.85rem × 1.62 line-height
-    CARD_FIXED_PX = 130      # padding + tag + h4 + subtitle + margins
+    CARD_FIXED_PX = 160      # padding + tag + h4 + subtitle + meta row + margins
+    PENALTY_ROW_PX = 50      # penalty row including margin + padding
     GAP_PX = 18
     CONTAINER_PAD_PX = 30
-    SAFETY_PX = 60           # font-rendering variance + animation buffer
+    SAFETY_PX = 80           # font-rendering variance + animation buffer
+
+    # Build a lookup of (act, section) -> finding so we can check which
+    # cards will have a penalty row.
+    findings = findings or []
+    finding_by_section = {
+        (f.get("act"), f.get("section")): f for f in findings
+    }
 
     total = CONTAINER_PAD_PX
     for src in sources:
         text_len = len(src.get("text", "") or "")
         body_lines = max(1, (text_len // CHARS_PER_LINE) + 1)
         card_h = CARD_FIXED_PX + body_lines * LINE_HEIGHT_PX
+
+        # Add space for the penalty row if this card has a non-empty penalty
+        finding = finding_by_section.get((src.get("act"), src.get("section"))) or {}
+        penalty = finding.get("penalty_range") or ""
+        if penalty and penalty != "Not specified in section":
+            card_h += PENALTY_ROW_PX
+
         total += card_h + GAP_PX
 
     return total + SAFETY_PX
+
+
+# ============================================================================
+# 6. Risk timeline — when each finding becomes a problem
+# ============================================================================
+def render_timeline(findings: list[dict]) -> str:
+    """Render a horizontal timeline of enforcement triggers.
+
+    Each finding becomes a node on the timeline. Critical gaps get red nodes,
+    major get orange, minor/compliant get gold/green. The node label shows
+    the enforcement trigger phrase (e.g. "Immediate", "At Rs. 20L turnover").
+    """
+    if not findings:
+        return ""
+
+    # Deduplicate triggers — multiple findings with the same trigger
+    # collapse into a single node.
+    nodes = []
+    seen_triggers = set()
+    for f in findings:
+        trigger = f.get("enforcement_trigger") or "Immediate"
+        if trigger in seen_triggers:
+            # Find existing node and append this finding's section
+            for n in nodes:
+                if n["trigger"] == trigger:
+                    n["sections"].append(f.get("section", ""))
+                    n["findings"].append(f)
+                    break
+        else:
+            seen_triggers.add(trigger)
+            nodes.append({
+                "trigger": trigger,
+                "sections": [f.get("section", "")],
+                "findings": [f],
+            })
+
+    # Build node HTML
+    nodes_html = []
+    for i, node in enumerate(nodes):
+        # Use the worst severity among the findings at this node
+        severities = [(f.get("severity") or "minor").lower() for f in node["findings"]]
+        if "critical" in severities:
+            color = SEAL_RED
+        elif "major" in severities:
+            color = "#C97A1D"
+        else:
+            color = GOLD
+
+        # Check if any finding is a gap
+        statuses = [(f.get("status") or "").lower() for f in node["findings"]]
+        is_gap = "gap" in statuses
+
+        sections_str = ", ".join(node["sections"][:3])
+        if len(node["sections"]) > 3:
+            sections_str += f" +{len(node['sections']) - 3}"
+
+        nodes_html.append(f"""
+        <div class="cm-tl-node" style="--node-color:{color}">
+            <div class="cm-tl-dot {'cm-tl-dot-gap' if is_gap else ''}"></div>
+            <div class="cm-tl-label">{html.escape(node['trigger'])}</div>
+            <div class="cm-tl-sections">{html.escape(sections_str)}</div>
+        </div>
+        """)
+
+    nodes_markup = '<div class="cm-tl-line"></div>\n' + "\n".join(nodes_html)
+
+    return f"""
+<style>
+{GOOGLE_FONTS_IMPORT}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; }}
+.cm-timeline {{
+    font-family: {FONT_BODY};
+    background: #FFFFFF;
+    border: 1px solid rgba(27,42,74,0.10);
+    border-radius: {CARD_RADIUS};
+    box-shadow: {CARD_SHADOW};
+    padding: 20px 22px;
+    margin: 6px 0 18px 0;
+}}
+.cm-tl-title {{
+    font-family: {FONT_DISPLAY};
+    font-weight: 600;
+    font-size: 1.05rem;
+    color: {NAVY};
+    margin: 0 0 4px 0;
+}}
+.cm-tl-sub {{
+    font-family: {FONT_BODY};
+    font-size: 0.82rem;
+    color: {INK};
+    opacity: 0.65;
+    margin: 0 0 18px 0;
+}}
+.cm-tl-track {{
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 20px 0 10px 0;
+    overflow-x: auto;
+}}
+.cm-tl-line {{
+    position: absolute;
+    top: 28px;
+    left: 5%;
+    right: 5%;
+    height: 2px;
+    background: linear-gradient(90deg, {SEAL_RED}, {GOLD}, {COMPLIANT_GREEN});
+    opacity: 0.3;
+    z-index: 0;
+}}
+.cm-tl-node {{
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 90px;
+    flex: 1;
+}}
+.cm-tl-dot {{
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--node-color);
+    border: 3px solid #FFFFFF;
+    box-shadow: 0 0 0 1px var(--node-color);
+    margin-bottom: 4px;
+}}
+.cm-tl-dot-gap {{
+    box-shadow: 0 0 0 1px var(--node-color), 0 0 0 5px color-mix(in srgb, var(--node-color) 20%, transparent);
+}}
+@supports not (background: color-mix(in srgb, red 10%, transparent)) {{
+    .cm-tl-dot-gap {{ box-shadow: 0 0 0 1px var(--node-color), 0 0 0 5px rgba(140,29,29,0.2); }}
+}}
+.cm-tl-label {{
+    font-family: {FONT_MONO};
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: {NAVY};
+    text-align: center;
+    line-height: 1.3;
+}}
+.cm-tl-sections {{
+    font-family: {FONT_MONO};
+    font-size: 0.55rem;
+    color: {INK};
+    opacity: 0.55;
+    text-align: center;
+    line-height: 1.3;
+}}
+.cm-tl-legend {{
+    display: flex;
+    gap: 16px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px dashed {RULE_GREY};
+    font-family: {FONT_MONO};
+    font-size: 0.58rem;
+    color: {INK};
+    opacity: 0.65;
+    flex-wrap: wrap;
+}}
+.cm-tl-legend-item {{
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}}
+.cm-tl-legend-dot {{
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}}
+</style>
+
+<div class="cm-timeline">
+    <h3 class="cm-tl-title">⏱  Risk Timeline — When Each Rule Bites</h3>
+    <p class="cm-tl-sub">Each node shows when the finding's enforcement trigger
+       fires. Larger rings indicate active gaps that need attention.</p>
+    <div class="cm-tl-track">
+        {nodes_markup}
+    </div>
+    <div class="cm-tl-legend">
+        <span class="cm-tl-legend-item"><span class="cm-tl-legend-dot" style="background:{SEAL_RED}"></span> Critical</span>
+        <span class="cm-tl-legend-item"><span class="cm-tl-legend-dot" style="background:#C97A1D"></span> Major</span>
+        <span class="cm-tl-legend-item"><span class="cm-tl-legend-dot" style="background:{GOLD}"></span> Minor / Compliant</span>
+        <span class="cm-tl-legend-item">Ring = active gap</span>
+    </div>
+</div>
+"""
+
+
+# ============================================================================
+# 7. Comparison view — two results side-by-side
+# ============================================================================
+def render_comparison(score_a: int, grade_a: str, grade_color_a: str,
+                      score_b: int, grade_b: str, grade_color_b: str,
+                      label_a: str = "A", label_b: str = "B",
+                      findings_a: list[dict] | None = None,
+                      findings_b: list[dict] | None = None) -> str:
+    """Render a side-by-side comparison of two compliance check results.
+
+    Shows two score gauges and a per-status diff table so the user can
+    see which option has more gaps / critical issues.
+    """
+    findings_a = findings_a or []
+    findings_b = findings_b or []
+
+    def _counts(findings):
+        c = {"gap": 0, "unclear": 0, "compliant": 0, "critical": 0, "major": 0}
+        for f in findings:
+            s = (f.get("status") or "").lower()
+            sev = (f.get("severity") or "minor").lower()
+            if s in c:
+                c[s] += 1
+            if sev in ("critical", "major"):
+                c[sev] += 1
+        return c
+
+    ca = _counts(findings_a)
+    cb = _counts(findings_b)
+
+    def _gauge(score, grade, color, label):
+        s = max(0, min(100, int(score)))
+        deg = s * 3.6
+        return f"""
+        <div class="cm-cmp-card">
+            <div class="cm-cmp-label">{html.escape(label)}</div>
+            <div class="cm-cmp-gauge" style="--ring-color:{color}; --ring-deg:{deg}deg;">
+                <div class="cm-cmp-gauge-inner">
+                    <span class="cm-cmp-score">{s}</span>
+                    <span class="cm-cmp-grade" style="color:{color}">{grade}</span>
+                </div>
+            </div>
+            <div class="cm-cmp-stats">
+                <div><span class="cm-cmp-stat-num" style="color:{SEAL_RED}">{ca['gap'] if label == label_a else cb['gap']}</span> gaps</div>
+                <div><span class="cm-cmp-stat-num" style="color:{SEAL_RED}">{ca['critical'] if label == label_a else cb['critical']}</span> critical</div>
+                <div><span class="cm-cmp-stat-num" style="color:{COMPLIANT_GREEN}">{ca['compliant'] if label == label_a else cb['compliant']}</span> compliant</div>
+            </div>
+        </div>
+        """
+
+    gauge_a = _gauge(score_a, grade_a, grade_color_a, label_a)
+    gauge_b = _gauge(score_b, grade_b, grade_color_b, label_b)
+
+    # Determine winner
+    if score_a > score_b:
+        verdict = f"{label_a} wins (+{score_a - score_b} points)"
+        verdict_color = COMPLIANT_GREEN
+    elif score_b > score_a:
+        verdict = f"{label_b} wins (+{score_b - score_a} points)"
+        verdict_color = COMPLIANT_GREEN
+    else:
+        verdict = "Tie — same compliance score"
+        verdict_color = GOLD
+
+    return f"""
+<style>
+{GOOGLE_FONTS_IMPORT}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; }}
+.cm-comparison {{
+    font-family: {FONT_BODY};
+    background: #FFFFFF;
+    border: 1px solid rgba(27,42,74,0.10);
+    border-radius: {CARD_RADIUS};
+    box-shadow: {CARD_SHADOW};
+    padding: 22px 26px;
+    margin: 6px 0 18px 0;
+}}
+.cm-cmp-title {{
+    font-family: {FONT_DISPLAY};
+    font-weight: 700;
+    font-size: 1.3rem;
+    color: {NAVY};
+    margin: 0 0 4px 0;
+    text-align: center;
+}}
+.cm-cmp-verdict {{
+    font-family: {FONT_MONO};
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: {verdict_color};
+    text-align: center;
+    margin: 0 0 20px 0;
+    padding: 6px 12px;
+    background: color-mix(in srgb, {verdict_color} 8%, transparent);
+    border-radius: 6px;
+    display: inline-block;
+    width: 100%;
+}}
+@supports not (background: color-mix(in srgb, red 10%, transparent)) {{
+    .cm-cmp-verdict {{ background: rgba(76,107,63,0.08); }}
+}}
+.cm-cmp-row {{
+    display: flex;
+    gap: 20px;
+    align-items: stretch;
+}}
+.cm-cmp-card {{
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    border: 1px solid rgba(27,42,74,0.10);
+    border-radius: 10px;
+    background: {PAPER};
+}}
+.cm-cmp-label {{
+    font-family: {FONT_MONO};
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: {NAVY};
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}}
+.cm-cmp-gauge {{
+    width: 90px;
+    height: 90px;
+    border-radius: 50%;
+    background: conic-gradient(
+        var(--ring-color) 0deg var(--ring-deg),
+        rgba(27,42,74,0.10) var(--ring-deg) 360deg
+    );
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}}
+.cm-cmp-gauge-inner {{
+    width: 68px;
+    height: 68px;
+    border-radius: 50%;
+    background: #FFFFFF;
+    border: 1px solid rgba(27,42,74,0.08);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}}
+.cm-cmp-score {{
+    font-family: {FONT_DISPLAY};
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: {NAVY};
+    line-height: 1;
+}}
+.cm-cmp-grade {{
+    font-family: {FONT_MONO};
+    font-size: 0.65rem;
+    font-weight: 700;
+    margin-top: 2px;
+}}
+.cm-cmp-stats {{
+    display: flex;
+    gap: 12px;
+    font-family: {FONT_MONO};
+    font-size: 0.62rem;
+    color: {INK};
+    opacity: 0.75;
+    text-align: center;
+}}
+.cm-cmp-stats > div {{
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}}
+.cm-cmp-stat-num {{
+    font-family: {FONT_DISPLAY};
+    font-size: 1.1rem;
+    font-weight: 700;
+}}
+@media (max-width: 520px) {{
+    .cm-cmp-row {{ flex-direction: column; }}
+}}
+</style>
+
+<div class="cm-comparison">
+    <h3 class="cm-cmp-title">⚖️  Side-by-Side Comparison</h3>
+    <div style="text-align:center;"><span class="cm-cmp-verdict">{verdict}</span></div>
+    <div class="cm-cmp-row">
+        {gauge_a}
+        {gauge_b}
+    </div>
+</div>
+"""
+
+
+# ============================================================================
+# 8. Action plan checklist — interactive gap-resolution tracker
+# ============================================================================
+def render_action_plan(findings: list[dict], resolved_keys: set | None = None) -> str:
+    """Render an interactive action plan checklist.
+
+    Each gap or unclear finding becomes a checklist item. When the user
+    marks an item as resolved (via Streamlit checkboxes in app.py), the
+    score is recalculated. This function just renders the visual list —
+    the actual checkbox state is managed by Streamlit via st.session_state.
+    """
+    resolved_keys = resolved_keys or set()
+    actionable = [f for f in findings
+                  if (f.get("status") or "").lower() in ("gap", "unclear")]
+
+    if not actionable:
+        return f"""
+<style>
+.cm-actionplan {{
+    font-family: {FONT_BODY};
+    background: #FFFFFF;
+    border: 1px solid rgba(27,42,74,0.10);
+    border-left: 4px solid {COMPLIANT_GREEN};
+    border-radius: {CARD_RADIUS};
+    padding: 18px 22px;
+    margin: 6px 0 18px 0;
+}}
+.cm-ap-title {{ font-family: {FONT_DISPLAY}; font-weight: 600; color: {NAVY}; margin: 0 0 4px 0; }}
+.cm-ap-sub {{ font-size: 0.85rem; color: {INK}; opacity: 0.7; margin: 0; }}
+</style>
+<div class="cm-actionplan">
+    <h3 class="cm-ap-title">✅  Action Plan — No Open Items</h3>
+    <p class="cm-ap-sub">All reviewed sections are compliant. No action needed.</p>
+</div>
+"""
+
+    items_html = []
+    for f in actionable:
+        status = (f.get("status") or "").lower()
+        severity = (f.get("severity") or "minor").lower()
+        key = f"{f.get('act', '')}::{f.get('section', '')}"
+        is_resolved = key in resolved_keys
+
+        if status == "gap":
+            sev_color = _SEVERITY_COLORS.get(severity, GOLD)
+            icon = "🔴" if severity == "critical" else "🟠" if severity == "major" else "🟡"
+        else:  # unclear
+            sev_color = GOLD
+            icon = "❓"
+
+        act_abbr = _act_abbreviation(f.get("act", ""))
+        section = html.escape(f.get("section", ""))
+        act = html.escape(f.get("act", ""))
+        reasoning = html.escape(f.get("reasoning", ""))
+        role = html.escape(f.get("role") or "Founder")
+
+        checked_attr = "checked" if is_resolved else ""
+        resolved_class = " cm-ap-resolved" if is_resolved else ""
+
+        items_html.append(f"""
+        <label class="cm-ap-item{resolved_class}" style="--sev-color:{sev_color}">
+            <span class="cm-ap-icon">{icon}</span>
+            <span class="cm-ap-check">
+                <input type="checkbox" data-key="{html.escape(key)}" {checked_attr} disabled>
+                <span class="cm-ap-box"></span>
+            </span>
+            <span class="cm-ap-content">
+                <span class="cm-ap-section">{section} · {act}</span>
+                <span class="cm-ap-reasoning">{reasoning}</span>
+                <span class="cm-ap-meta">👤 {role}</span>
+            </span>
+            <span class="cm-ap-seal">{act_abbr}</span>
+        </label>
+        """)
+
+    items_markup = "\n".join(items_html)
+    total = len(actionable)
+    resolved_count = len([f for f in actionable
+                          if f"{f.get('act', '')}::{f.get('section', '')}" in resolved_keys])
+
+    return f"""
+<style>
+{GOOGLE_FONTS_IMPORT}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; }}
+.cm-actionplan {{
+    font-family: {FONT_BODY};
+    background: #FFFFFF;
+    border: 1px solid rgba(27,42,74,0.10);
+    border-left: 4px solid {NAVY};
+    border-radius: {CARD_RADIUS};
+    padding: 20px 22px;
+    margin: 6px 0 18px 0;
+}}
+.cm-ap-header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed {RULE_GREY};
+}}
+.cm-ap-title {{
+    font-family: {FONT_DISPLAY};
+    font-weight: 600;
+    font-size: 1.1rem;
+    color: {NAVY};
+    margin: 0;
+}}
+.cm-ap-progress {{
+    font-family: {FONT_MONO};
+    font-size: 0.72rem;
+    color: {INK};
+    opacity: 0.7;
+}}
+.cm-ap-progress strong {{
+    color: {COMPLIANT_GREEN};
+}}
+.cm-ap-item {{
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 10px;
+    border-radius: 8px;
+    margin-bottom: 6px;
+    cursor: default;
+    transition: background 200ms ease;
+    position: relative;
+}}
+.cm-ap-item:hover {{
+    background: rgba(27,42,74,0.03);
+}}
+.cm-ap-item.cm-ap-resolved {{
+    opacity: 0.5;
+}}
+.cm-ap-item.cm-ap-resolved .cm-ap-content {{
+    text-decoration: line-through;
+}}
+.cm-ap-icon {{
+    flex: 0 0 auto;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}}
+.cm-ap-check {{
+    flex: 0 0 auto;
+    position: relative;
+    width: 18px;
+    height: 18px;
+    margin-top: 2px;
+}}
+.cm-ap-check input {{
+    position: absolute;
+    opacity: 0;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+    margin: 0;
+}}
+.cm-ap-box {{
+    display: block;
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--sev-color);
+    border-radius: 4px;
+    background: #FFFFFF;
+    transition: all 200ms ease;
+}}
+.cm-ap-check input:checked + .cm-ap-box {{
+    background: var(--sev-color);
+    border-color: var(--sev-color);
+}}
+.cm-ap-check input:checked + .cm-ap-box::after {{
+    content: "✓";
+    color: #FFFFFF;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+}}
+.cm-ap-content {{
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}}
+.cm-ap-section {{
+    font-family: {FONT_MONO};
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: {NAVY};
+}}
+.cm-ap-reasoning {{
+    font-size: 0.85rem;
+    color: {INK};
+    opacity: 0.85;
+    line-height: 1.4;
+}}
+.cm-ap-meta {{
+    font-family: {FONT_MONO};
+    font-size: 0.58rem;
+    color: {INK};
+    opacity: 0.55;
+    margin-top: 2px;
+}}
+.cm-ap-seal {{
+    flex: 0 0 auto;
+    font-family: {FONT_MONO};
+    font-size: 0.55rem;
+    font-weight: 700;
+    color: {SEAL_RED};
+    border: 1px solid {SEAL_RED};
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.6;
+}}
+</style>
+
+<div class="cm-actionplan">
+    <div class="cm-ap-header">
+        <h3 class="cm-ap-title">📋  Action Plan — Resolve Your Gaps</h3>
+        <span class="cm-ap-progress"><strong>{resolved_count}</strong> / {total} resolved</span>
+    </div>
+    {items_markup}
+</div>
+"""

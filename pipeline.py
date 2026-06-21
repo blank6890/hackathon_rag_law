@@ -33,9 +33,16 @@ load_dotenv()
 
 
 # ---------------------------------------------------------------------------
-# Retrieval import — swap this single line for the real module when ready
+# Retrieval import — uses the real ChromaDB-backed retrieval module.
+# The retrieval module auto-loads the corpus on first use, so no manual
+# setup is needed. Falls back to the keyword stub if chromadb is not
+# installed (e.g. in a stripped-down test environment).
 # ---------------------------------------------------------------------------
-from retrieval_stub import retrieve_sections  # TODO: swap for teammate's real retrieval.py
+try:
+    from retrieval import retrieve_sections  # real ChromaDB-backed retrieval
+except Exception:
+    # Fallback: use the keyword stub (e.g. if chromadb isn't installed)
+    from retrieval_stub import retrieve_sections
 
 
 # ---------------------------------------------------------------------------
@@ -150,8 +157,18 @@ def extract_facts(user_input: str) -> dict:
 def score_compliance(facts: dict, retrieved_sections: list[dict]) -> list[dict]:
     """Use llama-3.3-70b-versatile to assess compliance against retrieved sections.
 
-    Returns a list of dicts, each with: act, section, status, reasoning.
+    Returns a list of dicts, each with: act, section, status, severity,
+    penalty_range, citation_trust, role, enforcement_trigger, reasoning.
+
     status is one of: "compliant", "gap", "unclear".
+    severity is one of: "critical", "major", "minor".
+    penalty_range is a short string citing the penalty from the section text.
+    citation_trust is "direct" (section text directly addresses the business
+      situation) or "inferred" (LLM reasoned by analogy from the section).
+    role is who in the org should care: "Founder", "Legal", "Engineering",
+      "DPO", or "Finance".
+    enforcement_trigger is a short string describing WHEN this rule applies
+      (e.g. "Immediate", "At Rs. 20L turnover", "When you store any personal data").
     """
     model = "llama-3.3-70b-versatile"
     system_prompt = textwrap.dedent("""\
@@ -162,16 +179,34 @@ def score_compliance(facts: dict, retrieved_sections: list[dict]) -> list[dict]:
         Do NOT use any legal knowledge from your training data.
         Do NOT mention any law, section, or requirement that is not
         explicitly present in the provided sections.
-        If a section is not provided, you have NO basis to comment on it.
-        This constraint is essential to prevent hallucinated legal advice.
 
         Given:
         1. A set of extracted business facts (JSON)
         2. A list of retrieved Indian statute sections (JSON array)
 
         For EACH retrieved section, determine whether the described business
-        is likely compliant, has a compliance gap, or the situation is unclear
-        based SOLELY on the facts and the text of that section.
+        is likely compliant, has a compliance gap, or the situation is unclear.
+
+        Additionally, for each finding:
+        - severity: rate the RISK (critical/major/minor) based on worst-case
+          penalty mentioned in the section.
+        - penalty_range: extract the SPECIFIC penalty from the section text.
+          If none mentioned, set to "Not specified in section".
+        - citation_trust: "direct" if the section text DIRECTLY addresses the
+          business's situation (e.g. the business collects personal data and
+          the section is about personal data collection), or "inferred" if you
+          had to reason by analogy (e.g. the section is about banks but the
+          business is a fintech startup).
+        - role: who in the org should care about this finding — one of:
+          "Founder" (strategic decisions), "Legal" (legal review needed),
+          "Engineering" (technical implementation), "DPO" (Data Protection
+          Officer / privacy), "Finance" (tax/payments/registration).
+        - enforcement_trigger: a SHORT phrase (under 40 chars) describing WHEN
+          this rule applies to the business. Examples:
+          "Immediate" (applies as soon as you operate)
+          "At Rs. 20L turnover" (GST registration threshold)
+          "When you store personal data" (IT Act 43A)
+          "On first user transaction" (payment rules)
 
         Return ONLY a valid JSON array, no markdown, no other text:
         [
@@ -179,15 +214,14 @@ def score_compliance(facts: dict, retrieved_sections: list[dict]) -> list[dict]:
             "act": "<full act name>",
             "section": "<section number>",
             "status": "<compliant | gap | unclear>",
-            "reasoning": "<one sentence explaining your assessment, citing the specific section text>"
+            "severity": "<critical | major | minor>",
+            "penalty_range": "<short penalty string>",
+            "citation_trust": "<direct | inferred>",
+            "role": "<Founder | Legal | Engineering | DPO | Finance>",
+            "enforcement_trigger": "<short phrase under 40 chars>",
+            "reasoning": "<one sentence citing the section text>"
           }
         ]
-
-        Rules:
-        - Base your analysis ONLY on the provided section text.
-        - If the facts don't provide enough information to judge compliance
-          with a section, set status to "unclear".
-        - Keep reasoning to one concise sentence.
     """)
 
     user_prompt = (
@@ -196,7 +230,130 @@ def score_compliance(facts: dict, retrieved_sections: list[dict]) -> list[dict]:
     )
 
     raw = _call_llm(model, system_prompt, user_prompt)
-    return _parse_json_with_retry(raw, model, system_prompt, user_prompt)
+    findings = _parse_json_with_retry(raw, model, system_prompt, user_prompt)
+
+    # Backfill all new fields for any findings where the LLM omitted them.
+    for f in findings:
+        f.setdefault("severity", "minor")
+        f.setdefault("penalty_range", "Not specified in section")
+        f.setdefault("citation_trust", "inferred")
+        f.setdefault("role", "Founder")
+        f.setdefault("enforcement_trigger", "Immediate")
+
+    return findings
+
+
+# ========================== COMPLIANCE SCORE ===============================
+# Severity weights — how many points each finding type costs.
+# Tuned so that:
+#   - A perfectly compliant business scores 100 (A grade)
+#   - One critical gap drops you to 75 (B grade)
+#   - Two critical gaps drop you to 50 (D grade)
+#   - Three+ critical gaps drop you to F
+_SEVERITY_WEIGHTS = {
+    "critical": 25,
+    "major": 12,
+    "minor": 5,
+}
+
+# Unclear items cost a flat 3 points regardless of severity — they're
+# not gaps, but they represent unresolved risk.
+_UNCLEAR_PENALTY = 3
+
+
+def compute_compliance_score(findings: list[dict]) -> dict:
+    """Compute a 0-100 compliance score and letter grade from findings.
+
+    Formula:
+        score = 100
+              - (sum of severity_weight[gap.severity] for each gap)
+              - (UNCLEAR_PENALTY * count of unclear items)
+
+    Grade:
+        A: 90-100  (excellent)
+        B: 75-89   (good, minor gaps)
+        C: 60-74   (moderate risk)
+        D: 45-59   (significant risk)
+        F: 0-44    (critical risk)
+
+    Returns dict with: score (int 0-100), grade (str), grade_color (hex),
+      summary (str, one-line human-readable).
+    """
+    score = 100
+    gap_count = 0
+    unclear_count = 0
+    compliant_count = 0
+    critical_gaps = 0
+    major_gaps = 0
+    minor_gaps = 0
+
+    for f in findings:
+        status = (f.get("status") or "").lower()
+        severity = (f.get("severity") or "minor").lower()
+
+        if status == "gap":
+            gap_count += 1
+            weight = _SEVERITY_WEIGHTS.get(severity, 5)
+            score -= weight
+            if severity == "critical":
+                critical_gaps += 1
+            elif severity == "major":
+                major_gaps += 1
+            else:
+                minor_gaps += 1
+        elif status == "unclear":
+            unclear_count += 1
+            score -= _UNCLEAR_PENALTY
+        elif status == "compliant":
+            compliant_count += 1
+
+    score = max(0, min(100, score))
+
+    if score >= 90:
+        grade, grade_color = "A", "#4C6B3F"  # compliant green
+    elif score >= 75:
+        grade, grade_color = "B", "#B08D57"  # gold
+    elif score >= 60:
+        grade, grade_color = "C", "#B08D57"  # gold
+    elif score >= 45:
+        grade, grade_color = "D", "#8C1D1D"  # seal red
+    else:
+        grade, grade_color = "F", "#8C1D1D"  # seal red
+
+    # One-line summary
+    parts = []
+    if critical_gaps:
+        parts.append(f"{critical_gaps} critical gap{'s' if critical_gaps != 1 else ''}")
+    if major_gaps:
+        parts.append(f"{major_gaps} major gap{'s' if major_gaps != 1 else ''}")
+    if minor_gaps:
+        parts.append(f"{minor_gaps} minor gap{'s' if minor_gaps != 1 else ''}")
+    if unclear_count:
+        parts.append(f"{unclear_count} unclear")
+    if compliant_count:
+        parts.append(f"{compliant_count} compliant")
+
+    if not parts:
+        summary = "No findings to report."
+    elif gap_count == 0 and unclear_count == 0:
+        summary = f"Fully compliant across {compliant_count} section{'s' if compliant_count != 1 else ''} reviewed."
+    else:
+        summary = f"Score {score}/100 (grade {grade}): " + ", ".join(parts) + f", {compliant_count} compliant."
+
+    return {
+        "score": score,
+        "grade": grade,
+        "grade_color": grade_color,
+        "summary": summary,
+        "breakdown": {
+            "critical_gaps": critical_gaps,
+            "major_gaps": major_gaps,
+            "minor_gaps": minor_gaps,
+            "unclear": unclear_count,
+            "compliant": compliant_count,
+            "total": len(findings),
+        },
+    }
 
 
 def generate_recommendations(findings: list[dict]) -> str:
@@ -224,6 +381,78 @@ def generate_recommendations(findings: list[dict]) -> str:
     """)
     user_prompt = json.dumps(findings, indent=2)
     return _call_llm(model, system_prompt, user_prompt, temperature=0.3)
+
+
+# ========================== FOLLOW-UP CHAT ================================
+
+def answer_followup(question: str, findings: list[dict],
+                    sources: list[dict], business_desc: str) -> str:
+    """Answer a follow-up question in the context of the compliance report.
+
+    Uses llama-3.3-70b-versatile so the answer is grounded in the same
+    statute sections that produced the findings. The LLM is explicitly
+    told to only use the provided findings/sources and not hallucinate.
+    """
+    model = "llama-3.3-70b-versatile"
+    system_prompt = textwrap.dedent("""\
+        You are a friendly compliance advisor. The user has already run a
+        compliance check on their business and is now asking a follow-up
+        question. Answer based ONLY on the findings and statute sections
+        provided below. If the question is about something not covered in
+        the findings, say so honestly and suggest they re-run the check
+        with an updated business description.
+
+        Keep the answer concise (2-4 sentences). Use plain language.
+        Cite the act and section in parentheses where relevant.
+    """)
+    user_prompt = (
+        f"Business description:\n{business_desc}\n\n"
+        f"Findings:\n```json\n{json.dumps(findings, indent=2)}\n```\n\n"
+        f"Statute sections:\n```json\n{json.dumps(sources, indent=2)}\n```\n\n"
+        f"Follow-up question:\n{question}"
+    )
+    return _call_llm(model, system_prompt, user_prompt, temperature=0.3)
+
+
+# ========================== TRANSLATION ===================================
+
+_SUPPORTED_LANGUAGES = {
+    "English": "en",
+    "हिंदी (Hindi)": "hi",
+    "தமிழ் (Tamil)": "ta",
+    "বাংলা (Bengali)": "bn",
+}
+
+
+def get_supported_languages() -> dict:
+    """Return the dict of supported languages (label -> code)."""
+    return dict(_SUPPORTED_LANGUAGES)
+
+
+def translate_report(report: str, target_language: str) -> str:
+    """Translate the markdown report into the target language.
+
+    target_language is a language code like 'hi', 'ta', 'bn'.
+    'en' returns the report unchanged.
+    """
+    if target_language == "en" or not target_language:
+        return report
+
+    lang_name = {
+        "hi": "Hindi", "ta": "Tamil", "bn": "Bengali",
+    }.get(target_language, target_language)
+
+    model = "llama-3.3-70b-versatile"
+    system_prompt = textwrap.dedent(f"""\
+        You are a legal translator. Translate the following compliance report
+        into {lang_name}. Keep all markdown formatting intact. Keep the act
+        names and section numbers in English (they are proper nouns), but
+        translate the surrounding text. Keep citations like
+        "(DPDP Act 2023, Section 5)" unchanged.
+
+        Return ONLY the translated markdown. No preamble.
+    """)
+    return _call_llm(model, system_prompt, report, temperature=0.2)
 
 
 # ========================== ORCHESTRATOR ==================================
@@ -288,17 +517,25 @@ def run_pipeline(user_input: str) -> dict:
             ),
         }
 
-    # Step 4: Score compliance
+    # Step 4: Score compliance (now includes severity + penalty per finding)
     findings = score_compliance(facts, sections)
 
     # Step 5: Generate recommendations report
     report = generate_recommendations(findings)
+
+    # Step 6: Compute aggregate compliance score (0-100) + letter grade
+    score_result = compute_compliance_score(findings)
 
     return {
         "needs_clarification": False,
         "report": report,
         "findings": findings,
         "sources": sections,
+        "score": score_result["score"],
+        "grade": score_result["grade"],
+        "grade_color": score_result["grade_color"],
+        "score_summary": score_result["summary"],
+        "score_breakdown": score_result["breakdown"],
     }
 
 
