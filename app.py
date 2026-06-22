@@ -418,6 +418,13 @@ if mode == "🔍  Single check":
         st.session_state.business_desc = ""
 
     st.markdown("**Quick start — pick a template:**")
+    # Inject a hidden marker div so the global CSS can scope uniform-height
+    # styling to ONLY this row of preset buttons (via the sibling selector
+    # .cm-preset-row + [data-testid="stHorizontalBlock"]). Without this
+    # marker, the CSS would either have to target ALL stButton instances
+    # (which would break the primary "Check compliance" button) or use
+    # fragile :has() selectors. The marker keeps the targeting precise.
+    st.markdown('<div class="cm-preset-row"></div>', unsafe_allow_html=True)
     preset_cols = st.columns(len(_PRESETS))
     for i, (label, desc_text) in enumerate(_PRESETS.items()):
         if preset_cols[i].button(label, key=f"preset_{i}",

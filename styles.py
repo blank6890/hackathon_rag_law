@@ -317,6 +317,182 @@ hr {{
     font-family: {FONT_BODY};
     color: {NAVY};
 }}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ISSUE 1 FIX — Uniform-height preset buttons
+   ════════════════════════════════════════════════════════════════════════
+   Problem: The "D2C E-commerce" label wraps to two lines, making its
+   button taller than the other four preset buttons, breaking visual
+   consistency across the st.columns() row.
+
+   Fix: give every preset button a fixed height + vertically-center the
+   label so wrapping buttons (if any) don't push taller than the rest.
+   We scope this to the row that immediately follows a paragraph whose
+   text starts with "Quick start" — that way the styles ONLY affect the
+   preset buttons and not other stButton instances on the page.
+
+   Implementation: use :has() to find the column container that holds
+   the preset buttons. Each preset button is rendered inside a column
+   (div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]).
+   We target buttons inside those columns by matching the preceding
+   "Quick start" paragraph via the general sibling combinator.
+   */
+
+/* Step 1 — mark the preset row container. We do this by injecting a
+   hidden div via st.markdown() right before the columns; this CSS
+   targets any .cm-preset-row that exists on the page. See app.py
+   where we add <div class="cm-preset-row"></div> via st.markdown(). */
+.cm-preset-row + [data-testid="stHorizontalBlock"] [data-testid="stButton"] button {{
+    height: 60px !important;
+    min-height: 60px !important;
+    /* Vertically center the label whether it's one or two lines */
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    /* Allow wrapping but constrain the height — the flex centering
+       keeps the text vertically centered so a wrapped 2-line label
+       sits at the same vertical position as a 1-line label. */
+    white-space: normal !important;
+    line-height: 1.2 !important;
+    padding: 6px 10px !important;
+    /* Slightly smaller font so even the longest label fits without
+       wrapping on most viewports; falls back to wrapping gracefully. */
+    font-size: 0.78rem !important;
+    font-weight: 600;
+    text-align: center;
+    /* Override the primary-button navy background — presets are
+       secondary actions, so use a softer outline style. */
+    background: #FFFFFF !important;
+    color: {NAVY} !important;
+    border: 1px solid rgba(27,42,74,0.22) !important;
+    box-shadow: {CARD_SHADOW} !important;
+    transition: all 220ms {MOTION_EASE} !important;
+}}
+.cm-preset-row + [data-testid="stHorizontalBlock"] [data-testid="stButton"] button:hover {{
+    background: rgba(27,42,74,0.06) !important;
+    border-color: {NAVY} !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 4px 12px rgba(27,42,74,0.15) !important;
+}}
+.cm-preset-row + [data-testid="stHorizontalBlock"] [data-testid="stButton"] button:active {{
+    transform: translateY(0) !important;
+}}
+/* Keyboard focus — keep gold ring consistent with the rest of the app */
+.cm-preset-row + [data-testid="stHorizontalBlock"] [data-testid="stButton"] button:focus-visible {{
+    outline: 2px solid {GOLD} !important;
+    outline-offset: 2px !important;
+}}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ISSUE 2 FIX — Styled radio buttons (mode selector + view toggle)
+   ════════════════════════════════════════════════════════════════════════
+   Problem: st.radio() uses the browser's default radio dot, which
+   doesn't match the navy/gold theme.
+
+   Fix: hide the default radio input, restyle the label as a pill/tab
+   button. Selected = navy fill + cream text; unselected = cream fill
+   + navy text + thin border. Hovering an unselected option adds a
+   subtle gold underline.
+
+   Targets:
+   - The mode selector ("Single check" vs "Compare two businesses")
+   - The report view toggle ("Plain English" vs "Full statute text")
+   Both are horizontal radios, so we can style them identically.
+   */
+
+/* The radio widget container */
+[data-testid="stRadio"] {{
+    /* Remove Streamlit's default inner padding so our pills can
+       stretch edge-to-edge inside the row. */
+    padding-top: 4px !important;
+}}
+/* The horizontal row of options — Streamlit renders this as a flex
+   row of <label> elements, each wrapping a hidden radio input + a
+   visible text span. */
+[data-testid="stRadio"] [role="radiogroup"] {{
+    display: flex !important;
+    gap: 8px !important;
+    flex-wrap: wrap !important;
+}}
+/* Each individual radio option = one pill */
+[data-testid="stRadio"] [role="radiogroup"] label {{
+    flex: 1 1 0 !important;
+    min-width: 140px !important;
+    /* Pill shape */
+    border: 1.5px solid rgba(27,42,74,0.20) !important;
+    border-radius: 10px !important;
+    background: #FFFFFF !important;
+    color: {NAVY} !important;
+    padding: 10px 18px !important;
+    margin: 0 !important;
+    /* Typography */
+    font-family: {FONT_BODY} !important;
+    font-weight: 600 !important;
+    font-size: 0.88rem !important;
+    text-align: center !important;
+    cursor: pointer !important;
+    transition: all 220ms {MOTION_EASE} !important;
+    /* Make the label itself the flex container so we can hide the
+       native radio dot and center the text. */
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 8px !important;
+    position: relative !important;
+    user-select: none !important;
+}}
+/* Hide the native radio input — we'll drive the selected state via
+   the parent label's [aria-checked="true"] attribute, which
+   Streamlit sets automatically when the option is selected. */
+[data-testid="stRadio"] [role="radiogroup"] label input[type="radio"] {{
+    position: absolute !important;
+    opacity: 0 !important;
+    width: 0 !important;
+    height: 0 !important;
+    pointer-events: none !important;
+}}
+/* Hide Streamlit's default radio dot visual (the circle that sits
+   next to the label text). */
+[data-testid="stRadio"] [role="radiogroup"] label [data-testid="stRadioLabel"] {{
+    /* Streamlit wraps the visible text in this. We keep it but
+       remove any default left padding that was making room for
+       the radio dot. */
+    padding-left: 0 !important;
+}}
+/* Selected state — navy fill + cream text + gold accent border */
+[data-testid="stRadio"] [role="radiogroup"] label[aria-checked="true"] {{
+    background: {NAVY} !important;
+    color: {PAPER} !important;
+    border-color: {NAVY} !important;
+    box-shadow: 0 2px 8px rgba(27,42,74,0.25) !important;
+    /* Add a thin gold underline as a visual "active tab" marker */
+    border-bottom: 3px solid {GOLD} !important;
+}}
+/* Unselected hover — subtle navy tint + gold underline hint */
+[data-testid="stRadio"] [role="radiogroup"] label:not([aria-checked="true"]):hover {{
+    background: rgba(27,42,74,0.04) !important;
+    border-color: rgba(27,42,74,0.40) !important;
+    color: {NAVY} !important;
+    border-bottom: 3px solid rgba(176,141,87,0.50) !important;
+}}
+/* Keyboard focus on the label (when navigating via Tab) */
+[data-testid="stRadio"] [role="radiogroup"] label:focus-within {{
+    outline: 2px solid {GOLD} !important;
+    outline-offset: 2px !important;
+}}
+/* The visible text inside each pill — make sure it inherits the
+   pill's color so selected (cream) and unselected (navy) text colors
+   are correct. */
+[data-testid="stRadio"] [role="radiogroup"] label [data-testid="stRadioLabel"],
+[data-testid="stRadio"] [role="radiogroup"] label span {{
+    color: inherit !important;
+    font-weight: inherit !important;
+}}
+/* When selected, also tint any emoji/icon in the label gold for
+   a subtle premium feel. */
+[data-testid="stRadio"] [role="radiogroup"] label[aria-checked="true"] span {{
+    color: {GOLD} !important;
+}}
 </style>
 """
 
