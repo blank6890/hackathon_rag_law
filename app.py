@@ -27,8 +27,10 @@ FEATURES (cumulative):
       15. Shareable URL via query params
 """
 
+import os
 import streamlit as st
 import streamlit.components.v1 as components
+from streamlit_google_auth import Authenticate
 
 from pipeline import (
     run_pipeline, answer_followup, translate_report, get_supported_languages,
@@ -54,6 +56,26 @@ st.set_page_config(
 
 # ── Global styling ──────────────────────────────────────────────────────────
 st.markdown(get_global_css(), unsafe_allow_html=True)
+
+# ── Google Authentication ───────────────────────────────────────────────────
+if not os.path.exists("google_credentials.json"):
+    st.error("Missing `google_credentials.json`!")
+    st.markdown("Please create OAuth credentials in Google Cloud, set the redirect URI to `http://localhost:8501`, download the JSON, name it `google_credentials.json`, and place it in the root directory to continue.")
+    st.stop()
+
+authenticator = Authenticate(
+    secret_credentials_path='google_credentials.json',
+    cookie_name='compliancemind_cookie',
+    cookie_key='this_is_secret',
+    redirect_uri='http://localhost:8501',
+)
+authenticator.check_authentification()
+
+if not st.session_state.get('connected'):
+    components.html(render_hero(), height=200, scrolling=False)
+    st.info("Please log in with Google to use ComplianceMind.")
+    authenticator.login()
+    st.stop()
 
 # ── Session state initialization ────────────────────────────────────────────
 if "history" not in st.session_state:
@@ -313,6 +335,11 @@ def _render_results(result: dict, desc: str, show_action_plan: bool = True,
 with st.sidebar:
     st.markdown("## ⚖️ ComplianceMind")
     st.caption("_A cited compliance check, not a guess._")
+    
+    if st.session_state.get('connected'):
+        st.caption(f"👤 Logged in as: {st.session_state['user_info'].get('email')}")
+        authenticator.logout()
+        
     st.markdown("---")
 
     # ── History ────────────────────────────────────────────────────────────
