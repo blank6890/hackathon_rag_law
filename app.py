@@ -27,10 +27,8 @@ FEATURES (cumulative):
       15. Shareable URL via query params
 """
 
-import os
 import streamlit as st
 import streamlit.components.v1 as components
-from streamlit_google_auth import Authenticate
 
 from pipeline import (
     run_pipeline, answer_followup, translate_report, get_supported_languages,
@@ -56,41 +54,6 @@ st.set_page_config(
 
 # ── Global styling ──────────────────────────────────────────────────────────
 st.markdown(get_global_css(), unsafe_allow_html=True)
-
-# ── Google Authentication (Streamlit Cloud Compatible) ──────────────────────
-if not os.path.exists("google_credentials.json"):
-    # If on Streamlit Cloud, dynamically write the JSON file from st.secrets
-    if "google_credentials" in st.secrets:
-        with open("google_credentials.json", "w") as f:
-            f.write(st.secrets["google_credentials"])
-    else:
-        st.error("Missing `google_credentials.json` or `st.secrets['google_credentials']`!")
-        st.markdown(
-            "Please create OAuth credentials in Google Cloud, download the JSON, "
-            "and either save it as `google_credentials.json` locally or paste its contents "
-            "into Streamlit Cloud Secrets under the key `google_credentials`. "
-            "Never commit this JSON file to GitHub!"
-        )
-        st.stop()
-
-# Determine the redirect URI (local vs cloud)
-_redirect_uri = "http://localhost:8501"
-if "REDIRECT_URI" in st.secrets:
-    _redirect_uri = st.secrets["REDIRECT_URI"]
-
-authenticator = Authenticate(
-    secret_credentials_path='google_credentials.json',
-    cookie_name='compliancemind_cookie',
-    cookie_key='this_is_secret',
-    redirect_uri=_redirect_uri,
-)
-authenticator.check_authentification()
-
-if not st.session_state.get('connected'):
-    components.html(render_hero(), height=200, scrolling=False)
-    st.info("Please log in with Google to use ComplianceMind.")
-    authenticator.login()
-    st.stop()
 
 # ── Session state initialization ────────────────────────────────────────────
 if "history" not in st.session_state:
@@ -350,11 +313,6 @@ def _render_results(result: dict, desc: str, show_action_plan: bool = True,
 with st.sidebar:
     st.markdown("## ⚖️ ComplianceMind")
     st.caption("_A cited compliance check, not a guess._")
-    
-    if st.session_state.get('connected'):
-        st.caption(f"👤 Logged in as: {st.session_state['user_info'].get('email')}")
-        authenticator.logout()
-        
     st.markdown("---")
 
     # ── History ────────────────────────────────────────────────────────────
