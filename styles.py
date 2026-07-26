@@ -252,6 +252,40 @@ code, .stMarkdown code {{
     color: {NAVY};
 }}
 
+/* ── Chat Input ───────────────────────────────────────────────────────── */
+[data-testid="stChatInput"] {{
+    background: #FFFFFF !important;
+    border: 1px solid rgba(27,42,74,0.18) !important;
+    border-radius: 10px !important;
+    box-shadow: {CARD_SHADOW} !important;
+}}
+[data-testid="stChatInput"] textarea {{
+    color: {INK} !important;
+    background: transparent !important;
+}}
+[data-testid="stChatInput"] textarea::placeholder {{
+    color: {INK} !important;
+    opacity: 0.4 !important;
+}}
+[data-testid="stChatInput"] button {{
+    background: {NAVY} !important;
+    border-radius: 6px !important;
+}}
+[data-testid="stChatInput"] button svg {{
+    fill: {PAPER} !important;
+    color: {PAPER} !important;
+}}
+
+/* ── Selectbox ────────────────────────────────────────────────────────── */
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div {{
+    background: #FFFFFF !important;
+    border: 1px solid rgba(27,42,74,0.18) !important;
+    border-radius: 10px !important;
+}}
+[data-testid="stSelectbox"] span {{
+    color: {INK} !important;
+}}
+
 /* ── Accessibility: visible keyboard focus, respect reduced motion ─────── */
 [data-testid="stButton"] button:focus-visible,
 [data-testid="stTextArea"] textarea:focus-visible {{
