@@ -452,11 +452,14 @@ if mode == "🔍  Single check":
             st.warning("Please enter a business description first.")
         else:
             result = _run_check(user_input.strip())
-            if result:
-                if result.get("needs_clarification"):
-                    st.warning(result["message"])
-                else:
-                    _render_results(result, user_input.strip())
+            if result and result.get("needs_clarification"):
+                st.warning(result["message"])
+
+    # Persist the results display on any Streamlit rerun (e.g. from chat input or toggles)
+    if (st.session_state.last_result 
+        and not st.session_state.last_result.get("needs_clarification")
+        and user_input.strip() == st.session_state.last_desc):
+        _render_results(st.session_state.last_result, st.session_state.last_desc)
 
 else:
     # ── Comparison mode ─────────────────────────────────────────────────────
