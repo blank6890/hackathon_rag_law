@@ -277,6 +277,9 @@ code, .stMarkdown code {{
                 box-shadow {MOTION_DURATION} {MOTION_EASE},
                 background {MOTION_DURATION} {MOTION_EASE};
 }}
+[data-testid="stButton"] button p {{
+    color: inherit !important;
+}}
 [data-testid="stButton"] button:hover {{
     background: #243a63;
     box-shadow: 0 4px 14px rgba(27,42,74,0.32);
@@ -342,7 +345,7 @@ hr {{
    hidden div via st.markdown() right before the columns; this CSS
    targets any .cm-preset-row that exists on the page. See app.py
    where we add <div class="cm-preset-row"></div> via st.markdown(). */
-.cm-preset-row + [data-testid="stHorizontalBlock"] [data-testid="stButton"] button {{
+div[data-testid="stElementContainer"]:has(.cm-preset-row) + div[data-testid="stElementContainer"] [data-testid="stHorizontalBlock"] [data-testid="stButton"] button {{
     height: 60px !important;
     min-height: 60px !important;
     /* Vertically center the label whether it's one or two lines */
@@ -368,17 +371,20 @@ hr {{
     box-shadow: {CARD_SHADOW} !important;
     transition: all 220ms {MOTION_EASE} !important;
 }}
-.cm-preset-row + [data-testid="stHorizontalBlock"] [data-testid="stButton"] button:hover {{
+div[data-testid="stElementContainer"]:has(.cm-preset-row) + div[data-testid="stElementContainer"] [data-testid="stHorizontalBlock"] [data-testid="stButton"] button p {{
+    color: {NAVY} !important;
+}}
+div[data-testid="stElementContainer"]:has(.cm-preset-row) + div[data-testid="stElementContainer"] [data-testid="stHorizontalBlock"] [data-testid="stButton"] button:hover {{
     background: rgba(27,42,74,0.06) !important;
     border-color: {NAVY} !important;
     transform: translateY(-1px) !important;
     box-shadow: 0 4px 12px rgba(27,42,74,0.15) !important;
 }}
-.cm-preset-row + [data-testid="stHorizontalBlock"] [data-testid="stButton"] button:active {{
+div[data-testid="stElementContainer"]:has(.cm-preset-row) + div[data-testid="stElementContainer"] [data-testid="stHorizontalBlock"] [data-testid="stButton"] button:active {{
     transform: translateY(0) !important;
 }}
 /* Keyboard focus — keep gold ring consistent with the rest of the app */
-.cm-preset-row + [data-testid="stHorizontalBlock"] [data-testid="stButton"] button:focus-visible {{
+div[data-testid="stElementContainer"]:has(.cm-preset-row) + div[data-testid="stElementContainer"] [data-testid="stHorizontalBlock"] [data-testid="stButton"] button:focus-visible {{
     outline: 2px solid {GOLD} !important;
     outline-offset: 2px !important;
 }}
