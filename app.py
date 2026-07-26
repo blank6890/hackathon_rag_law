@@ -329,6 +329,7 @@ with st.sidebar:
                          help=item["desc"]):
                 # Reload this check
                 st.session_state.business_desc = item["full_desc"]
+                st.session_state.single_input = item["full_desc"]
                 st.rerun()
 
     st.markdown("---")
@@ -430,6 +431,7 @@ if mode == "🔍  Single check":
         if preset_cols[i].button(label, key=f"preset_{i}",
                                   use_container_width=True):
             st.session_state.business_desc = desc_text
+            st.session_state.single_input = desc_text
             st.rerun()
 
     # ── Input ───────────────────────────────────────────────────────────────
