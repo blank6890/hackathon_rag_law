@@ -57,17 +57,32 @@ st.set_page_config(
 # ── Global styling ──────────────────────────────────────────────────────────
 st.markdown(get_global_css(), unsafe_allow_html=True)
 
-# ── Google Authentication ───────────────────────────────────────────────────
+# ── Google Authentication (Streamlit Cloud Compatible) ──────────────────────
 if not os.path.exists("google_credentials.json"):
-    st.error("Missing `google_credentials.json`!")
-    st.markdown("Please create OAuth credentials in Google Cloud, set the redirect URI to `http://localhost:8501`, download the JSON, name it `google_credentials.json`, and place it in the root directory to continue.")
-    st.stop()
+    # If on Streamlit Cloud, dynamically write the JSON file from st.secrets
+    if "google_credentials" in st.secrets:
+        with open("google_credentials.json", "w") as f:
+            f.write(st.secrets["google_credentials"])
+    else:
+        st.error("Missing `google_credentials.json` or `st.secrets['google_credentials']`!")
+        st.markdown(
+            "Please create OAuth credentials in Google Cloud, download the JSON, "
+            "and either save it as `google_credentials.json` locally or paste its contents "
+            "into Streamlit Cloud Secrets under the key `google_credentials`. "
+            "Never commit this JSON file to GitHub!"
+        )
+        st.stop()
+
+# Determine the redirect URI (local vs cloud)
+_redirect_uri = "http://localhost:8501"
+if "REDIRECT_URI" in st.secrets:
+    _redirect_uri = st.secrets["REDIRECT_URI"]
 
 authenticator = Authenticate(
     secret_credentials_path='google_credentials.json',
     cookie_name='compliancemind_cookie',
     cookie_key='this_is_secret',
-    redirect_uri='http://localhost:8501',
+    redirect_uri=_redirect_uri,
 )
 authenticator.check_authentification()
 
